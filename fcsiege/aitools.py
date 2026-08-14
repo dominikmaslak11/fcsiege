@@ -35,6 +35,7 @@ class ScenarioBridge(Protocol):
     def ai_reach(self, args: dict) -> dict: ...
     def ai_cities(self, args: dict) -> dict: ...
     def ai_disband(self, args: dict) -> dict: ...
+    def ai_trade(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -278,6 +279,29 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "szlaki_handlowe",
+        "description": (
+            "Wyznacza optymalne szlaki handlowe dla karawan, wprost z reguł "
+            "danego zestawu. Typ trasy decyduje o jej wartości: w wielu "
+            "zestawach trasa między własnymi miastami daje 0% (tylko premię "
+            "jednorazową), zagraniczna 100%, a międzykontynentalna 200%; trasa "
+            "z wrogiem, z którym jesteś w stanie wojny, jest warta 0 i zostaje "
+            "anulowana. Uwzględnia minimalny dystans, limit tras na miasto "
+            "i zajęte już sloty. Wywołaj, gdy użytkownik pyta o karawany, "
+            "handel, trasy handlowe albo rozważa handel zamiast podboju."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "ile tras zaproponować, domyślnie 15"},
+                "tylko_miedzykontynentalne": {"type": "boolean",
+                    "description": "pokaż wyłącznie trasy przez morze (zwykle najcenniejsze)"},
+                "pelny_wglad": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "co_da_rozwiazanie",
         "description": (
             "Liczy, co da rozwiązanie zbędnych jednostek: ile tarcz wróci "
@@ -400,6 +424,7 @@ TOOL_METHOD = {
     "przejezdnosc": "ai_reach",
     "audyt_miast": "ai_cities",
     "co_da_rozwiazanie": "ai_disband",
+    "szlaki_handlowe": "ai_trade",
 }
 
 
@@ -439,6 +464,8 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_cities(dict(args))
     if name == "co_da_rozwiazanie":
         return bridge.ai_disband(dict(args))
+    if name == "szlaki_handlowe":
+        return bridge.ai_trade(dict(args))
     return {"blad": f"nieznane narzędzie: {name}"}
 
 

@@ -582,6 +582,160 @@ class Intel:
         out["garnizony"] = garrisons
         return out
 
+    # ---------------------------------------------------------- handel
+
+    def _continents(self) -> dict[tuple[int, int], int]:
+        tmap = TerrainMap(self.save)
+        ocean = {"Ocean", "Deep Ocean", "Lake", "Inaccessible"}
+
+        def land(x, y):
+            t = tmap.terrain(x, y)
+            return t is not None and t not in ocean
+
+        return regions(tmap, land)
+
+    def trade_routes(self, rs, limit: int = 15, full: bool = False,
+                     only_overseas: bool = False) -> dict:
+        """Proponuje szlaki handlowe wg regul danego zestawu.
+
+        Typ trasy (krajowa / zagraniczna / miedzykontynentalna) decyduje
+        o procencie wartosci - w wielu zestawach trasy miedzy wlasnymi
+        miastami daja 0%, a miedzykontynentalne podwojna stawke.
+        """
+        import os
+        import collections
+        from .registry import parse_file
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+
+        # zasady handlu z regul
+        pct: dict[str, int] = {}
+        bonus: dict[str, str] = {}
+        path = os.path.join(rs.path, "game.ruleset")
+        if os.path.exists(path):
+            g = parse_file(path, base_dir=os.path.dirname(rs.path))
+            sec = g.get("trade")
+            tbl = sec.table("settings") if sec else None
+            for r in (tbl.dicts() if tbl else []):
+                pct[str(r.get("type"))] = int(r.get("pct") or 0)
+                bonus[str(r.get("type"))] = str(r.get("bonus") or "")
+
+        max_routes = 0
+        for eff in rs.effects_by_type.get("Max_Trade_Routes", []):
+            if not eff.reqs:
+                max_routes = max(max_routes, eff.value)
+
+        st = s.reg.get("settings")
+        stbl = st.table("set") if st else None
+        settings = {str(r.get("name")): r.get("value")
+                    for r in (stbl.dicts() if stbl else [])}
+        mindist = int(settings.get("trademindist") or 9)
+
+        cont = self._continents()
+        my = s.cities_of(s.me.slot)
+        foreign = s.known_cities()
+        if full:
+            seen = {(c.x, c.y) for c in foreign}
+            for p in s.players.values():
+                if p.slot == s.me.slot:
+                    continue
+                for c in s.cities_of(p.slot):
+                    if (c.x, c.y) not in seen:
+                        foreign.append(c)
+
+        nations = {p.slot: p.nation for p in s.players.values()}
+        dipl = s.me.diplomacy
+
+        # ile slotow juz zajete
+        sec_me = s._sections[s.me.slot]
+        ctbl = sec_me.table("c")
+        used = collections.Counter()
+        for r in (ctbl.dicts() if ctbl else []):
+            n = 0
+            for i in range(8):
+                v = r.get(f"traderoute{i}")
+                if v not in (None, 0, "0"):
+                    n += 1
+            used[str(r.get("name"))] = n
+
+        def route_type(fc) -> str:
+            same_cont = cont.get((fc.x, fc.y)) == cont.get(("__", "__"))
+            return ""
+
+        def dist(a, b) -> int:
+            return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+
+        cands = []
+        for mc in my:
+            mc_cont = cont.get((mc.x, mc.y))
+            for fc in foreign:
+                ic = cont.get((fc.x, fc.y)) != mc_cont
+                rel = dipl.get(fc.owner, "?")
+                if rel in ("Alliance",):
+                    kind = "AllyIC" if ic else "Ally"
+                elif rel in ("War",):
+                    kind = "EnemyIC" if ic else "Enemy"
+                elif rel == "Team":
+                    kind = "TeamIC" if ic else "Team"
+                else:
+                    kind = "INIC" if ic else "IN"
+                value_pct = pct.get(kind, 0)
+                if value_pct <= 0:
+                    continue
+                if only_overseas and not ic:
+                    continue
+                d = dist((mc.x, mc.y), (fc.x, fc.y))
+                if d < mindist:
+                    continue
+                # przyblizenie klasycznego wzoru: (dystans+10) * (handel obu
+                # miast) / 24; handlu miast nie ma w zapisie, wiec bierzemy
+                # rozmiar jako przyblizenie
+                score = (d + 10) * (mc.size + fc.size) * value_pct // 2400
+                cands.append({
+                    "moje_miasto": mc.name, "rozmiar": mc.size,
+                    "partner": fc.name, "nacja": nations.get(fc.owner, "?"),
+                    "rozmiar_partnera": fc.size,
+                    "stan_dyplomatyczny": rel,
+                    "typ_trasy": kind, "procent_wartosci": value_pct,
+                    "miedzykontynentalna": ic,
+                    "dystans": d, "ocena": score,
+                })
+        cands.sort(key=lambda c: -c["ocena"])
+
+        # przydzial zachlanny: limit tras na miasto
+        picked = []
+        per_city = collections.Counter()
+        taken = set()
+        for c in cands:
+            if max_routes and used[c["moje_miasto"]] + per_city[c["moje_miasto"]] >= max_routes:
+                continue
+            key = (c["moje_miasto"], c["partner"])
+            if key in taken:
+                continue
+            taken.add(key)
+            per_city[c["moje_miasto"]] += 1
+            picked.append(c)
+            if len(picked) >= limit:
+                break
+
+        martwe = sorted({k for k, v in pct.items() if v <= 0})
+        return {
+            "tryb_wywiadu": "pełny wgląd (świadome chity)" if full
+            else "tylko moja wiedza (mgła wojny)",
+            "zasady": {k: {"procent": v, "premia_jednorazowa": bonus.get(k, "")}
+                       for k, v in pct.items()},
+            "bez_wartosci": martwe,
+            "min_dystans": mindist,
+            "max_tras_na_miasto": max_routes,
+            "wolnych_slotow": sum(max(0, max_routes - used[c.name]) for c in my),
+            "propozycje": picked,
+            "kandydatow_lacznie": len(cands),
+            "uwaga": ("Ocena jest przybliżona: zapis nie zawiera handlu miasta, "
+                      "więc zamiast niego bierzemy rozmiar. Kolejność jest "
+                      "wiarygodna, wartości bezwzględne nie."),
+        }
+
     # ------------------------------------------------------ rozwiazywanie
 
     def disband_plan(self, rs, unit_types: list[str] | None = None,
@@ -1015,6 +1169,12 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_trade(self, args: dict) -> dict:
+        full = bool(args.get("pelny_wglad", self._intel_full))
+        return self._need_intel().trade_routes(
+            self._intel_ruleset(), int(args.get("limit") or 15), full,
+            bool(args.get("tylko_miedzykontynentalne")))
 
     def ai_disband(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))

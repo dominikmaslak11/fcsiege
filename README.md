@@ -122,11 +122,11 @@ poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys)
 > Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
 > możesz użyć.
 
-**Czym asystent steruje** (17 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+**Czym asystent steruje** (18 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
 `ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
 `tabela_wytrzymalosci`, `dane_jednostki`, `spis`, oraz wywiad z zapisu gry:
 `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`,
-`porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`.
+`porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`, `szlaki_handlowe`.
 
 Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
 zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
@@ -224,7 +224,24 @@ odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerkną
 w karty przeciwnika i o tym zapomnieć.
 
 Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
-`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`.
+`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`, `szlaki_handlowe`.
+
+### Szlaki handlowe
+
+`szlaki_handlowe` czyta tabelę typów tras z `game.ruleset` i wyznacza najlepsze
+pary miast. W `sandbox` różnice są ogromne i decydują o całej strategii:
+
+| typ trasy | wartość |
+|---|---|
+| między własnymi miastami (`National`, `NationalIC`) | **0%** — tylko premia jednorazowa |
+| zagraniczna, ten sam kontynent (`IN`) | 100% |
+| zagraniczna, przez morze (`INIC`) | **200%** |
+| z wrogiem w stanie wojny (`Enemy`) | **0%**, trasa zostaje anulowana |
+
+Narzędzie uwzględnia minimalny dystans (`trademindist`), limit tras na miasto
+(`Max_Trade_Routes`) i sloty już zajęte, po czym przydziela trasy zachłannie.
+Ocena jest przybliżona — zapis nie zawiera handlu miasta, więc zamiast niego
+brany jest rozmiar; kolejność jest wiarygodna, wartości bezwzględne nie.
 
 ### Co da rozwiązanie jednostek
 

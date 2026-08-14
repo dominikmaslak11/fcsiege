@@ -359,6 +359,32 @@ def test_savegame():
           bool(front.get("fronty"))
           and "moje_najblizsze_miasta" in front["fronty"][0])
 
+    trade = dispatch(bridge, "szlaki_handlowe", {"limit": 10})
+    check("czyta tabelę typów tras z reguł",
+          {"IN", "INIC", "National"} <= set(trade.get("zasady", {})),
+          str(sorted(trade.get("zasady", {}))))
+    check("wie, które trasy są bezwartościowe",
+          "National" in trade["bez_wartosci"] and "Enemy" in trade["bez_wartosci"],
+          str(trade["bez_wartosci"]))
+    check("międzykontynentalna jest warta więcej niż krajowa",
+          trade["zasady"]["INIC"]["procent"] > trade["zasady"]["IN"]["procent"])
+    check("czyta minimalny dystans i limit tras",
+          trade["min_dystans"] > 0 and trade["max_tras_na_miasto"] > 0,
+          f"dist={trade['min_dystans']} max={trade['max_tras_na_miasto']}")
+    check("proponuje trasy i respektuje minimalny dystans",
+          bool(trade["propozycje"])
+          and all(c["dystans"] >= trade["min_dystans"] for c in trade["propozycje"]))
+    check("nie proponuje tras bezwartościowych",
+          all(c["procent_wartosci"] > 0 for c in trade["propozycje"]))
+    import collections as _c
+    per = _c.Counter(c["moje_miasto"] for c in trade["propozycje"])
+    check("respektuje limit tras na miasto",
+          all(v <= trade["max_tras_na_miasto"] for v in per.values()), str(per))
+    ov = dispatch(bridge, "szlaki_handlowe",
+                  {"limit": 5, "tylko_miedzykontynentalne": True})
+    check("da się ograniczyć do tras przez morze",
+          all(c["miedzykontynentalna"] for c in ov["propozycje"]))
+
     plan = dispatch(bridge, "co_da_rozwiazanie", {})
     check("czyta procent zwrotu z reguł",
           0 < plan.get("zwrot_procent", 0) <= 100, str(plan.get("zwrot_procent")))
@@ -398,8 +424,13 @@ def test_savegame():
           all(c["limit_wielkosci"] for c in audit["miasta"]),
           str(audit["miasta"][0]["limit_wielkosci"]))
 
-    reach = dispatch(bridge, "przejezdnosc", {"jednostki": ["Catapult"]})
-    kat = reach.get("jednostki", {}).get("Catapult")
+    # typ jednostki dobieramy z tego, co gracz faktycznie ma w zapisie
+    army = dispatch(bridge, "moje_wojska", {})
+    heavy = next((e["jednostka"] for e in army.get("wg_typu", [])
+                  if e["jednostka"] in ("Catapult", "Cannon", "Artillery")), None)
+    reach = dispatch(bridge, "przejezdnosc",
+                     {"jednostki": [heavy] if heavy else []})
+    kat = reach.get("jednostki", {}).get(heavy) if heavy else None
     if kat:
         check("rozpoznaje klasę ciężkiej jednostki", kat["klasa"] == "Big Land",
               kat["klasa"])
@@ -416,8 +447,11 @@ def test_savegame():
                   f"{link['kafli_do_zbudowania']} kafli / "
                   f"{link['lacznie_tur_pracy']} tur pracy")
 
-    piech = dispatch(bridge, "przejezdnosc", {"jednostki": ["Pikemen"]})
-    pk = piech.get("jednostki", {}).get("Pikemen")
+    foot = next((e["jednostka"] for e in army.get("wg_typu", [])
+                 if e["jednostka"] in ("Pikemen", "Warriors", "Phalanx", "Knights")),
+                None)
+    piech = dispatch(bridge, "przejezdnosc", {"jednostki": [foot] if foot else []})
+    pk = piech.get("jednostki", {}).get(foot) if foot else None
     if pk:
         check("zwykła piechota wchodzi wszędzie poza Inaccessible",
               pk["nie_wchodzi_bez_drogi"] == ["Inaccessible"],
