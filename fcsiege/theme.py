@@ -85,6 +85,10 @@ QLabel#Hint {{
     font-size: 11px;
     color: {TEXT_FAINT};
 }}
+QLabel#Hint a, QTextBrowser a {{
+    color: {DEFEND};
+    text-decoration: none;
+}}
 QLabel#AppTitle {{
     font-size: 19px;
     font-weight: 800;
@@ -340,6 +344,38 @@ QScrollBar::handle:horizontal {{
     background: {SURFACE_3};
     border-radius: 5px;
     min-width: 30px;
+}}
+
+QTextBrowser#ChatView {{
+    background: {SURFACE_2};
+    border: 1px solid {BORDER_SOFT};
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 12.5px;
+}}
+QPlainTextEdit {{
+    background: {SURFACE_2};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    selection-background-color: {DEFEND_DIM};
+}}
+QPlainTextEdit:focus {{
+    border-color: {ACCENT};
+}}
+QPushButton#Suggestion {{
+    background: {SURFACE_2};
+    border: 1px solid {BORDER_SOFT};
+    border-radius: 12px;
+    padding: 5px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: {TEXT_DIM};
+}}
+QPushButton#Suggestion:hover {{
+    background: {SURFACE_3};
+    color: {TEXT};
 }}
 
 QToolTip {{

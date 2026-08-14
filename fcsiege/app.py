@@ -110,6 +110,8 @@ class MainWindow(QWidget):
         self._ruleset_dirs: dict[str, str] = {}
         self._rank_cache_valid = False
         self._last_result = None
+        self._ai_last: dict = {}
+        self.chat: object | None = None
 
         self._build_ui()
         self._discover_rulesets()
@@ -125,11 +127,16 @@ class MainWindow(QWidget):
 
         root.addWidget(self._build_header())
 
-        cols = QHBoxLayout()
+        self.cols = cols = QHBoxLayout()
         cols.setSpacing(14)
         cols.addWidget(self._scroll(self._build_attacker_column()), 23)
         cols.addWidget(self._scroll(self._build_defender_column()), 26)
         cols.addWidget(self._build_result_column(), 51)
+        self.chat_holder = QWidget()
+        chl = QVBoxLayout(self.chat_holder)
+        chl.setContentsMargins(0, 0, 0, 0)
+        self.chat_holder.setVisible(False)
+        cols.addWidget(self.chat_holder, 0)
         root.addLayout(cols, 1)
 
         self._debounce = QTimer(self)
@@ -186,6 +193,19 @@ class MainWindow(QWidget):
         switch.setObjectName("ModeSwitch")
         lay.addWidget(switch)
         lay.addStretch(1)
+
+        self.btn_chat = QPushButton("Asystent")
+        self.btn_chat.setCheckable(True)
+        self.btn_chat.setObjectName("ModeButton")
+        self.btn_chat.setFixedWidth(94)
+        self.btn_chat.toggled.connect(self._toggle_chat)
+        chat_wrap = QWidget()
+        cwl = QHBoxLayout(chat_wrap)
+        cwl.setContentsMargins(3, 3, 3, 3)
+        cwl.addWidget(self.btn_chat)
+        chat_wrap.setObjectName("ModeSwitch")
+        lay.addWidget(chat_wrap)
+        lay.addSpacing(8)
 
         lay.addWidget(_label("ZESTAW REGUŁ"))
         self.cmb_ruleset = QComboBox()
@@ -386,10 +406,10 @@ class MainWindow(QWidget):
 
         tiles = QHBoxLayout()
         tiles.setSpacing(10)
-        self.tile_need = StatTile("jednostek na 90%")
+        self.tile_need = StatTile("potrzeba (90%)")
         self.tile_loss = StatTile("średnie straty")
         self.tile_cost = StatTile("koszt strat")
-        self.tile_duel = StatTile("pojedynek 1 na 1")
+        self.tile_duel = StatTile("pojedynek")
         for t in (self.tile_need, self.tile_loss, self.tile_cost, self.tile_duel):
             tiles.addWidget(t)
         lay.addLayout(tiles)
@@ -517,6 +537,31 @@ class MainWindow(QWidget):
         lay.addWidget(table)
         return w
 
+    # -------------------------------------------------------------- asystent
+
+    def _toggle_chat(self, on: bool) -> None:
+        if on and self.chat is None:
+            from .chatpanel import ChatPanel
+            self.chat = ChatPanel(self)
+            self.chat_holder.layout().addWidget(self.chat)
+        self.chat_holder.setVisible(on)
+        # przy otwartym czacie oddajemy mu czesc szerokosci wyników
+        self.cols.setStretch(0, 18 if on else 23)
+        self.cols.setStretch(1, 21 if on else 26)
+        self.cols.setStretch(2, 36 if on else 51)
+        self.cols.setStretch(3, 25 if on else 0)
+        if on:
+            self.setMinimumWidth(1500)
+            if self.width() < 1720:
+                self.resize(1720, self.height())
+        else:
+            self.setMinimumWidth(1180)
+
+    def closeEvent(self, ev):  # noqa: N802 - API Qt
+        if self.chat is not None:
+            self.chat.shutdown()
+        super().closeEvent(ev)
+
     # ------------------------------------------------------------ tryb pracy
 
     def _set_mode(self, mode: str) -> None:
@@ -562,10 +607,10 @@ class MainWindow(QWidget):
             "Wpisz siły, którymi wróg uderzy w jednej turze.")
         self.chk_barracks.setVisible(not atk)
         self.lbl_barracks_hint.setVisible(not atk)
-        self.tile_need.set_label("jednostek na 90%" if atk else "obrońców na 95%")
+        self.tile_need.set_label("potrzeba (90%)" if atk else "obrońców (95%)")
         self.tile_loss.set_label("średnie straty" if atk else "straty wroga")
         self.tile_cost.set_label("koszt strat" if atk else "zatrzyma")
-        self.tile_duel.set_label("pojedynek 1 na 1" if atk else "utrzymanie")
+        self.tile_duel.set_label("pojedynek" if atk else "utrzymanie")
         self.wrap_moves.setVisible(atk and bool(self._rs)
                                    and self._rs.combat.tired_attack)
 
@@ -933,6 +978,30 @@ class MainWindow(QWidget):
 
         self._update_defense_chart(rs, enemy, ut, vet, sit, promo, planned)
         self._update_defense_staging(rs, enemy, ut, vet, sit)
+        self._ai_last = {
+            "tryb": "obrona",
+            "zestaw_regul": rs.name,
+            "obronca": ut.name,
+            "stopien_obroncy": ut.vet_levels[min(vet, len(ut.vet_levels) - 1)].name
+            if ut.vet_levels else "green",
+            "sily_wroga": [f"{a.count}x {a.utype.name}" for a in enemy],
+            "teren": sit.terrain.name,
+            "budowle": sorted(sit.buildings | sit.player_buildings),
+            "sila_ataku_wroga": round(d.attack_power / 10, 2) if d else None,
+            "sila_mojej_obrony": round(d.defense_power / 10, 2) if d else None,
+            "mnozniki_obrony": [
+                {"opis": m.label, "mnoznik": round(m.factor, 3), "skladniki": m.details}
+                for m in d.defense_bd.modifiers] if d else [],
+            "szansa_wroga_w_pojedynku_proc": round(d.p_win * 100, 2) if d else None,
+            "minimum_obroncow_na_95proc": mc,
+            "utrzymanie_przy_minimum_proc": round(p_at * 100, 2),
+            "plan_obroncow": planned,
+            "utrzymanie_przy_planie_proc": round(res.p_hold * 100, 2),
+            "srednie_straty_wroga": round(res.mean_att_losses, 2),
+            "srednie_straty_moje": round(res.mean_def_losses, 2),
+            "garnizon_zatrzyma_napastnikow": stops,
+            "uwagi": res.notes,
+        }
         tips = defense_advice(rs, res, enemy, [Side(ut, vet, planned)], sit, stops)
         self._render_tips(tips, res.notes, rs,
                           f"{res.n_attacks} napastników kontra {planned} obrońców")
@@ -973,6 +1042,32 @@ class MainWindow(QWidget):
         self._update_breakdown(d)
         self._update_staging(att, defenders, sit)
         self._update_tips(rs, res, att, defenders, sit)
+        self._ai_last = {
+            "tryb": "szturm",
+            "zestaw_regul": rs.name,
+            "atakujacy": att.utype.name,
+            "obroncy": [f"{d.count}x {d.utype.name}" for d in defenders],
+            "teren": sit.terrain.name,
+            "budowle": sorted(sit.buildings | sit.player_buildings),
+            "sila_ataku": round(d.attack_power / 10, 2),
+            "sila_obrony": round(d.defense_power / 10, 2),
+            "mnozniki_obrony": [
+                {"opis": m.label, "mnoznik": round(m.factor, 3), "skladniki": m.details}
+                for m in d.defense_bd.modifiers],
+            "sila_ognia": {"atakujacy": d.attacker_fp, "obronca": d.defender_fp},
+            "zycie": {"atakujacy": d.attacker_hp, "obronca": d.defender_hp},
+            "szansa_pojedynku_proc": round(d.p_win * 100, 2),
+            "srednio_atakow": round(res.mean_attacks, 2),
+            "srednie_straty": round(res.mean_losses, 2),
+            "koszt_strat_tarcze": round(res.mean_shields_lost),
+            "potrzeba_50proc": res.attacks_for(0.5),
+            "potrzeba_90proc": res.attacks_for(0.9),
+            "potrzeba_99proc": res.attacks_for(0.99),
+            "plan_jednostek": self.spn_planned.value(),
+            "szansa_przy_planie_proc": round(res.p_with(self.spn_planned.value()) * 100, 2),
+            "zajmie_miasto": rs.uclass_of(att.utype).can_occupy_city,
+            "uwagi": res.notes,
+        }
         self._refresh_active_tab()
 
     # ------------------------------------------------ prezentacja obrony
@@ -1387,3 +1482,341 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ==========================================================================
+#  Most dla asystenta: narzedzia Claude'a operuja na tym samym interfejsie,
+#  ktory widzi uzytkownik. Wszystkie metody wolane sa w watku interfejsu.
+# ==========================================================================
+
+def _unit_names(rs, predicate) -> list[str]:
+    return sorted(u.name for u in rs.units.values() if predicate(u))
+
+
+class _AIBridge:
+    """Metody doklejane do MainWindow (patrz _install_ai_bridge)."""
+
+
+def _ai_run_tool(self, name: str, args: object, deliver: object) -> None:
+    """Slot: wykonuje narzedzie w watku interfejsu i odsyla wynik."""
+    from .aitools import dispatch
+    try:
+        result = dispatch(self, name, args if isinstance(args, dict) else {})
+    except Exception as exc:  # noqa: BLE001
+        result = {"blad": f"{type(exc).__name__}: {exc}"}
+    if callable(deliver):
+        deliver(result)
+
+
+def _ai_context_note(self) -> str:
+    """Krotkie streszczenie stanu, doklejane do promptu systemowego."""
+    if not self._rs:
+        return ""
+    s = self.ai_snapshot()
+    return (f"tryb={s['tryb']}, zestaw_regul={s['zestaw_regul']}, "
+            f"teren={s['teren_miasta']}, w_miescie={s['w_miescie']}, "
+            f"budowle={s['budowle']}, moja_jednostka={s['moja_jednostka']['jednostka']}, "
+            f"sily_wroga={s['sily_wroga']}, poziom_technologiczny={s['poziom_technologiczny']}")
+
+
+def _ai_snapshot(self) -> dict:
+    rs = self._rs
+    ut = self._current_attacker()
+    return {
+        "tryb": "szturm" if self.mode == MODE_ATTACK else "obrona",
+        "zestaw_regul": rs.name if rs else None,
+        "teren_miasta": self.cmb_def_terrain.currentData(),
+        "teren_atakujacego": self.cmb_att_terrain.currentData(),
+        "w_miescie": self.chk_city.isChecked(),
+        "wielkosc_miasta": self.spn_size.value(),
+        "okopani": self.chk_fort.isChecked(),
+        "budowle": sorted(n for n, cb in self.chk_buildings.items() if cb.isChecked()),
+        "ulepszenia_kafla": sorted(n for n, cb in self.chk_extras.items() if cb.isChecked()),
+        "ustroj": self.cmb_gov.currentText(),
+        "poziom_technologiczny": self.sld_tech.value(),
+        "maks_poziom_technologiczny": rs.max_tech_depth() if rs else 0,
+        "z_koszar": self.chk_barracks.isChecked(),
+        "awanse_obroncow": self.chk_promo.isChecked(),
+        "moja_jednostka": {
+            "jednostka": ut.name if ut else None,
+            "stopien": max(0, self.cmb_att_vet.currentIndex()),
+            "liczba": self.spn_planned.value(),
+        },
+        "sily_wroga": [
+            {"jednostka": r.unit.currentData(),
+             "liczba": r.count.value(),
+             "stopien": max(0, r.vet.currentIndex())}
+            for r in self.def_rows if r.count.value() > 0
+        ],
+    }
+
+
+def _ai_apply(self, patch: dict) -> dict:
+    """Ustawia kontrolki wedlug lat z narzedzia. Zwraca nowy stan i ostrzezenia."""
+    rs = self._rs
+    warn: list[str] = []
+    self._loading = True
+    try:
+        if "zestaw_regul" in patch:
+            i = self.cmb_ruleset.findText(str(patch["zestaw_regul"]))
+            if i < 0:
+                warn.append(f"nie znam zestawu reguł {patch['zestaw_regul']}")
+            else:
+                self._loading = False
+                self.cmb_ruleset.setCurrentIndex(i)
+                self._loading = True
+                rs = self._rs
+
+        if "tryb" in patch:
+            want = MODE_ATTACK if str(patch["tryb"]).startswith("szturm") else MODE_DEFENSE
+            if want != self.mode:
+                self._loading = False
+                self._set_mode(want)
+                self._loading = True
+
+        if "poziom_technologiczny" in patch:
+            self.sld_tech.setValue(int(patch["poziom_technologiczny"]))
+            self._populate_units(keep=True)
+
+        for key, combo in (("teren_miasta", self.cmb_def_terrain),
+                           ("teren_atakujacego", self.cmb_att_terrain)):
+            if key in patch:
+                i = combo.findData(str(patch[key]))
+                if i < 0:
+                    warn.append(f"nie znam terenu {patch[key]}")
+                else:
+                    combo.setCurrentIndex(i)
+
+        if "w_miescie" in patch:
+            self.chk_city.setChecked(bool(patch["w_miescie"]))
+        if "wielkosc_miasta" in patch:
+            self.spn_size.setValue(max(1, min(40, int(patch["wielkosc_miasta"]))))
+        if "okopani" in patch:
+            self.chk_fort.setChecked(bool(patch["okopani"]))
+        if "z_koszar" in patch:
+            self.chk_barracks.setChecked(bool(patch["z_koszar"]))
+        if "ustroj" in patch:
+            i = self.cmb_gov.findText(str(patch["ustroj"]))
+            if i < 0:
+                warn.append(f"nie znam ustroju {patch['ustroj']}")
+            else:
+                self.cmb_gov.setCurrentIndex(i)
+
+        if "budowle" in patch:
+            want = {str(x) for x in (patch["budowle"] or [])}
+            for missing in want - set(self.chk_buildings):
+                warn.append(f"nie ma budowli {missing} w tym zestawie reguł")
+            for name, cb in self.chk_buildings.items():
+                cb.setChecked(name in want)
+        if "ulepszenia_kafla" in patch:
+            want = {str(x) for x in (patch["ulepszenia_kafla"] or [])}
+            for missing in want - set(self.chk_extras):
+                warn.append(f"nie ma ulepszenia {missing} w tym zestawie reguł")
+            for name, cb in self.chk_extras.items():
+                cb.setChecked(name in want)
+
+        if "moja_jednostka" in patch:
+            spec = patch["moja_jednostka"] or {}
+            if spec.get("jednostka"):
+                i = self.cmb_att_unit.findData(str(spec["jednostka"]))
+                if i < 0:
+                    warn.append(f"jednostka {spec['jednostka']} jest niedostępna "
+                                f"w tym trybie lub na tym poziomie technologicznym")
+                else:
+                    self.cmb_att_unit.setCurrentIndex(i)
+                    self._populate_vet(self.cmb_att_vet, self._current_attacker())
+            if spec.get("stopien") is not None:
+                self.cmb_att_vet.setCurrentIndex(
+                    max(0, min(int(spec["stopien"]), self.cmb_att_vet.count() - 1)))
+            if spec.get("liczba") is not None:
+                self.spn_planned.setValue(max(1, min(200, int(spec["liczba"]))))
+
+        if "sily_wroga" in patch:
+            entries = list(patch["sily_wroga"] or [])[:MAX_DEFENDER_GROUPS]
+            for row in self.def_rows:
+                row.count.setValue(0)
+            for row, spec in zip(self.def_rows, entries):
+                i = row.unit.findData(str(spec.get("jednostka", "")))
+                if i < 0:
+                    warn.append(f"jednostka {spec.get('jednostka')} jest niedostępna "
+                                f"po stronie wroga w tym trybie")
+                    continue
+                row.unit.setCurrentIndex(i)
+                self._populate_vet(row.vet, rs.units.get(row.unit.currentData()))
+                row.vet.setCurrentIndex(
+                    max(0, min(int(spec.get("stopien") or 0), row.vet.count() - 1)))
+                row.count.setValue(max(0, min(24, int(spec.get("liczba") or 1))))
+    finally:
+        self._loading = False
+
+    self._rank_cache_valid = False
+    self._recalculate()
+    out = self.ai_snapshot()
+    if warn:
+        out["ostrzezenia"] = warn
+    return out
+
+
+def _ai_compute(self) -> dict:
+    self._recalculate()
+    return dict(self._ai_last) if self._ai_last else {"blad": "brak wyniku"}
+
+
+def _ai_ranking(self, limit: int) -> dict:
+    rs = self._rs
+    sit = self._situation()
+    if self.mode == MODE_ATTACK:
+        defenders = self._defenders()
+        if not defenders:
+            return {"blad": "nie ustawiono obrońców"}
+        att = self._attacker()
+        opts = rank_units(rs, defenders, sit, self._known_techs(),
+                          attacker_vet=att.vet if att else 0,
+                          promotions=self.chk_promo.isChecked(), trials=4000,
+                          occupiers_only=self.chk_occupiers.isChecked())
+        self._rank_cache_valid = False
+        self._refresh_active_tab()
+        return {
+            "tryb": "szturm",
+            "opis": "ile jednostek trzeba i ile z nich zginie",
+            "pozycje": [{
+                "jednostka": o.name,
+                "szansa_pojedynku_proc": round(o.p_single * 100, 1),
+                "potrzeba_na_90proc": o.attacks_90,
+                "srednie_straty": round(o.mean_losses, 2),
+                "koszt_strat_tarcze": round(o.shields_lost),
+                "inwestycja_tarcze": o.invest_90,
+                "zajmie_miasto": o.can_occupy,
+                "technologia": o.req_techs,
+            } for o in opts[:limit]],
+        }
+
+    enemy = self._defenders()
+    if not enemy:
+        return {"blad": "nie ustawiono sił wroga"}
+    opts = rank_defenders(rs, enemy, sit, self._known_techs(), confidence=0.95,
+                          promotions=self.chk_promo.isChecked(), trials=3000,
+                          from_barracks=self.chk_barracks.isChecked())
+    self._rank_cache_valid = False
+    self._refresh_active_tab()
+    return {
+        "tryb": "obrona",
+        "opis": "najmniejszy garnizon, który utrzyma miasto z pewnością 95%",
+        "pozycje": [{
+            "jednostka": o.name,
+            "minimum_sztuk": o.min_count,
+            "utrzymanie_proc": round(o.p_at_min * 100, 2),
+            "jedna_sztuka_zatrzyma": o.stops_alone,
+            "obrona": round(o.defense_power / 10, 1),
+            "koszt_tarcze": o.shields,
+            "stopien": o.vet_name,
+            "leczy_sie_do_pelna": o.heals_fully,
+            "technologia": o.req_techs,
+        } for o in opts[:limit]],
+    }
+
+
+def _ai_resilience(self) -> dict:
+    if self.mode != MODE_DEFENSE:
+        return {"blad": "tabela wytrzymałości działa tylko w trybie obrony"}
+    rs = self._rs
+    sit = self._situation()
+    ut = self._current_attacker()
+    if ut is None:
+        return {"blad": "nie wybrano jednostki obronnej"}
+    vet = veteran_build_level(rs, sit, ut) if self.chk_barracks.isChecked() \
+        else max(0, self.cmb_att_vet.currentIndex())
+    threats = [u for u in rs.units_available(self._known_techs())
+               if u.attack > 0 and "NonMil" not in u.flags
+               and rs.uclass_of(u).can_occupy_city]
+    threats.sort(key=lambda u: (rs.unit_tech_depth(u), -u.attack))
+    threats = threats[:7]
+    rng = np.random.default_rng(77)
+    rows = []
+    for m in (1, 2, 3, 4, 6):
+        row = {"garnizon": f"{m} × {ut.name}"}
+        for threat in threats:
+            row[threat.name] = max_wave_stopped(
+                rs, Side(threat, 0), [Side(ut, vet, m)], sit, 0.95,
+                self.chk_promo.isChecked(), 2500, rng)
+        rows.append(row)
+    self._rank_cache_valid = False
+    self._refresh_active_tab()
+    return {"opis": "ilu napastników odeprze garnizon przy 95% pewności",
+            "obronca": ut.name, "stopien": ut.vet_levels[vet].name if ut.vet_levels else "green",
+            "wiersze": rows}
+
+
+def _ai_catalog(self, what: str) -> dict:
+    rs = self._rs
+    if what == "zestawy":
+        return {"zestawy": [self.cmb_ruleset.itemText(i)
+                            for i in range(self.cmb_ruleset.count())]}
+    if what == "teren":
+        return {"teren": [{"nazwa": t.name, "obrona_proc": t.defense_bonus,
+                           "koszt_ruchu": t.movement_cost}
+                          for t in rs.land_terrains()]}
+    if what == "budowle":
+        return {"budowle": [{"nazwa": b.name, "koszt": b.build_cost,
+                             "cud": b.is_wonder, "technologia": b.req_techs()}
+                            for b in rs.defensive_buildings()]}
+    if what == "ulepszenia":
+        return {"ulepszenia": [{"nazwa": e.name, "obrona_proc": e.defense_bonus}
+                               for e in rs.defensive_extras()]}
+    if what == "ustroje":
+        return {"ustroje": list(rs.governments)}
+    known = self._known_techs()
+    return {
+        "dostepne_teraz": True,
+        "poziom_technologiczny": self.sld_tech.value(),
+        "jednostki": [{
+            "nazwa": u.name, "atak": u.attack, "obrona": u.defense,
+            "zycie": u.hitpoints, "koszt": u.build_cost,
+            "technologia": u.req_techs(),
+        } for u in sorted(rs.units_available(known),
+                          key=lambda u: (rs.unit_tech_depth(u), u.name))
+            if u.attack > 0 or u.defense > 0],
+    }
+
+
+def _ai_unit(self, name: str) -> dict:
+    rs = self._rs
+    ut = rs.units.get(name)
+    if ut is None:
+        import difflib
+        close = difflib.get_close_matches(name, list(rs.units), n=5, cutoff=0.6)
+        close += [n for n in rs.units
+                  if name.lower() in n.lower() and n not in close]
+        return {"blad": f"nie ma jednostki {name} w zestawie {rs.name}",
+                "podobne": close[:5]}
+    uc = rs.uclass_of(ut)
+    return {
+        "nazwa": ut.name, "klasa": uc.name,
+        "atak": ut.attack, "obrona": ut.defense, "zycie": ut.hitpoints,
+        "sila_ognia": ut.firepower, "ruch": ut.move_rate,
+        "koszt": ut.build_cost, "utrzymanie": ut.uk_shield,
+        "technologia": ut.req_techs(),
+        "zajmie_miasto": uc.can_occupy_city,
+        "premia_terenu": uc.terrain_defense,
+        "flagi": sorted(ut.flags),
+        "bonusy": [{"wobec_flagi": b.flag, "typ": b.type, "wartosc": b.value}
+                   for b in ut.bonuses],
+        "stopnie": [{"nazwa": lv.name, "mnoznik": lv.power_fact / 100}
+                    for lv in ut.vet_levels],
+    }
+
+
+def _install_ai_bridge() -> None:
+    """Doklejа metody mostu do MainWindow (trzymane osobno dla czytelnosci)."""
+    MainWindow.ai_run_tool = _ai_run_tool
+    MainWindow.ai_context_note = _ai_context_note
+    MainWindow.ai_snapshot = _ai_snapshot
+    MainWindow.ai_apply = _ai_apply
+    MainWindow.ai_compute = _ai_compute
+    MainWindow.ai_ranking = _ai_ranking
+    MainWindow.ai_resilience = _ai_resilience
+    MainWindow.ai_catalog = _ai_catalog
+    MainWindow.ai_unit = _ai_unit
+
+
+_install_ai_bridge()

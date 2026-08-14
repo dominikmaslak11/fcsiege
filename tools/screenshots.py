@@ -109,6 +109,15 @@ def main() -> int:
     shot(app, win, os.path.join(out, "07-wytrzymalosc.png"), "Wytrzymałość")
     shot(app, win, os.path.join(out, "08-wskazowki.png"), "Wskazówki")
 
+    print("Asystent:")
+    win.btn_chat.setChecked(True)
+    app.processEvents()
+    win.resize(1780, 960)
+    app.processEvents()
+    shot(app, win, os.path.join(out, "09-asystent.png"), "Szansa utrzymania")
+    win.btn_chat.setChecked(False)
+    win.resize(*SIZE)
+
     print(f"\nZapisano w {out}")
     return 0
 

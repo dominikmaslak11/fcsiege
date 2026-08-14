@@ -6,6 +6,9 @@ dwa pytania:
 * **Szturm** — ile jednostek muszę poświęcić, żeby zdobyć to miasto?
 * **Obrona** — ile jednostek i jakich muszę zostawić, żeby wróg go nie zajął?
 
+Można je zadać klikając w panelach albo **napisać zwykłym zdaniem do wbudowanego
+asystenta**, który sam ustawi scenariusz i policzy.
+
 Wszystko liczone z oryginalnych plików `.ruleset`, więc wynik naprawdę zależy od
 zestawu reguł, na którym grasz.
 
@@ -17,10 +20,11 @@ zestawu reguł, na którym grasz.
 git clone https://github.com/dominikmaslak11/fcsiege.git
 cd fcsiege
 pip install PySide6 numpy      # jeśli jeszcze ich nie masz
+pip install anthropic          # opcjonalnie: asystent
 python3 fcsiege.py
 ```
 
-Wymaga Pythona 3.10+.
+Wymaga Pythona 3.10+. Bez pakietu `anthropic` wszystko poza czatem działa normalnie.
 
 ## Skąd biorą się liczby
 
@@ -86,6 +90,40 @@ rozkaz `fortify` w mieście cokolwiek daje (w `classic`, `sandbox` i `civ2civ3`
 
 ![Wskazówki](docs/08-wskazowki.png)
 
+## Asystent
+
+Przycisk **Asystent** w nagłówku otwiera czat. Opisujesz sytuację zwykłym
+zdaniem, a model ustawia scenariusz i uruchamia obliczenia — zmiany widać na
+żywo w panelach po lewej, bo asystent klika w ten sam interfejs co Ty.
+
+![Asystent](docs/09-asystent.png)
+
+**Model:** `claude-opus-5`, adaptacyjne myślenie, odpowiedź strumieniowana.
+Włączony jest serwerowy `fallbacks: "default"` — gdy klasyfikator bezpieczeństwa
+odrzuci zapytanie, API automatycznie przenosi je na model zapasowy.
+
+**Logowanie.** Aplikacja szuka poświadczeń w kolejności: zmienna
+`ANTHROPIC_API_KEY` → klucz zapisany w `~/.config/fcsiege/credentials.json`
+(prawa 0600) → profil OAuth z `~/.config/anthropic` (zakładany przez CLI
+Anthropica poleceniem `ant auth login`). Jeśli nic nie znajdzie, panel czatu
+poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys).
+
+> Uwaga: w wielu dystrybucjach polecenie `ant` to **Apache Ant**, nie CLI
+> Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
+> możesz użyć.
+
+**Czym asystent steruje** (9 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+`ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
+`tabela_wytrzymalosci`, `dane_jednostki`, `spis`.
+
+Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
+zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
+w wątku interfejsu, więc czat i klikanie nigdy nie rozjeżdżają się ze sobą.
+
+**Co jest wysyłane:** treść rozmowy i ustawienia scenariusza (jednostki, teren,
+budowle) trafiają do API Anthropic. Bez otwarcia czatu aplikacja nie łączy się
+z siecią w ogóle.
+
 ## Model walki
 
 Za `common/combat.c`:
@@ -132,10 +170,16 @@ Oba tryby to ten sam model widziany z dwóch stron; test
 ## Testy
 
 ```bash
-python3 tests/test_combat.py
+python3 tests/test_combat.py    # silnik walki
+python3 tests/test_chat.py      # asystent (bez sieci, klient podstawiony)
 ```
 
-Sprawdzają m.in.: zgodność wzoru na pojedynek z niezależną symulacją runda po
+`test_chat.py` sprawdza schematy narzędzi, most do interfejsu (czy narzędzie
+naprawdę przestawia kontrolkę i czy zwraca te same liczby co karta odpowiedzi),
+pełną pętlę `tool_use → tool_result → odpowiedź` na podstawionym kliencie oraz
+obsługę odmowy modelu.
+
+`test_combat.py` sprawdza m.in.: zgodność wzoru na pojedynek z niezależną symulacją runda po
 rundzie (200 tys. prób), ręcznie policzone wartości dla `classic`, różnice
 między zestawami reguł, zużycie rakiet, działanie koszar i `fortify`,
 monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
@@ -149,6 +193,9 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 * Kalkulator nie wie, czy miasto jest nadbrzeżne ani czy lotnictwo doleci —
   dlatego filtr „tylko jednostki, które mogą samodzielnie zająć miasto” jest
   domyślnie włączony.
+* Asystent liczy wyłącznie tym silnikiem, ale sam dobór scenariusza to jego
+  interpretacja Twojego opisu — sprawdź w panelach, czy ustawił to, co miałeś
+  na myśli.
 * Model obejmuje **jedną turę** szturmu. To zwykle wystarcza, bo w mieście
   z koszarami obrońcy odzyskują między turami 100% życia.
 
@@ -162,7 +209,10 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/advisor.py` | rankingi jednostek, ocena kafli, wskazówki |
 | `fcsiege/widgets.py` | rysowane ręcznie: karta odpowiedzi, wykres, paski sił |
 | `fcsiege/theme.py` | paleta i arkusz stylów |
-| `fcsiege/app.py` | okno główne |
+| `fcsiege/app.py` | okno główne + most dla asystenta |
+| `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
+| `fcsiege/aiclient.py` | poświadczenia i pętla rozmowy ze strumieniowaniem |
+| `fcsiege/chatpanel.py` | interfejs czatu i logowania |
 | `tools/screenshots.py` | generuje zrzuty do `docs/` (działa bez ekranu) |
 
 ## Licencja
