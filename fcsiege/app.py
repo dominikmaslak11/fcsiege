@@ -1937,7 +1937,7 @@ def _install_ai_bridge() -> None:
     MainWindow._intel_ruleset = _intel_ruleset
     # narzedzia wywiadu sa wspolne dla okna i trybu bez Qt
     for _name in ("_load_save", "_need_intel", "ai_savegame", "ai_army",
-                  "ai_nation", "ai_front", "ai_governments", "ai_reach"):
+                  "ai_nation", "ai_front", "ai_governments", "ai_reach", "ai_cities"):
         setattr(MainWindow, _name, getattr(IntelMixin, _name))
     MainWindow._intel = None
     MainWindow._intel_full = False

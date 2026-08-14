@@ -542,6 +542,105 @@ class Intel:
         out["garnizony"] = garrisons
         return out
 
+    # -------------------------------------------------------------- miasta
+
+    def cities_audit(self, rs) -> dict:
+        """Wielkosc miast, limity wzrostu i ile jednostek jeszcze wyzywia.
+
+        W wielu zestawach regul darmowe utrzymanie ZYWNOSCIOWE rosnie razem
+        z miastem (efekt Unit_Upkeep_Free_Per_City dla OutputType:Food
+        z warunkami MinSize), a limit wielkosci podnosza akwedukt i kanalizacja.
+        Wszystko czytamy z regul - nic nie jest tu zaszyte.
+        """
+        import collections
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+
+        # ile jednostek na zywnosci miasto utrzyma za darmo, wg wielkosci
+        base = 0
+        steps: list[int] = []
+        for eff in rs.effects_by_type.get("Unit_Upkeep_Free_Per_City", []):
+            types = [r.name for r in eff.reqs if r.type == "OutputType"]
+            if types != ["Food"]:
+                continue
+            sizes = [int(r.name) for r in eff.reqs
+                     if r.type == "MinSize" and str(r.name).isdigit()]
+            govs = [r.name for r in eff.reqs if r.type == "Gov"]
+            if govs:
+                continue
+            if sizes:
+                steps.extend([sizes[0]] * eff.value)
+            else:
+                base += eff.value
+        steps.sort()
+
+        def free_food(size: int) -> int:
+            return base + sum(1 for m in steps if size >= m)
+
+        # limit wielkosci: Size_Adj sumuje sie, Size_Unlimit znosi limit
+        def size_cap(buildings: set[str]) -> tuple[int, bool]:
+            cap = 0
+            for eff in rs.effects_by_type.get("Size_Adj", []):
+                need = [r for r in eff.reqs if r.type == "Building"]
+                if all((r.name in buildings) == r.present for r in need):
+                    cap += eff.value
+            unlimited = False
+            for eff in rs.effects_by_type.get("Size_Unlimit", []):
+                need = [r for r in eff.reqs if r.type == "Building"]
+                if need and all((r.name in buildings) == r.present for r in need):
+                    unlimited = True
+            return cap, unlimited
+
+        food_cost = {}
+        for name, ut in rs.units.items():
+            food_cost[name] = getattr(ut, "uk_food", 0)
+
+        sec = s._sections[s.me.slot]
+        tbl = sec.table("c")
+        by_home = collections.defaultdict(list)
+        for u in s.units_of(s.me.slot):
+            by_home[u.homecity].append(u)
+
+        rows = []
+        for r in (tbl.dicts() if tbl else []):
+            cid = int(r.get("id") or 0)
+            size = int(r.get("size") or 0)
+            blds = set(s._bits(r.get("improvements")))
+            here = by_home.get(cid, [])
+            eaters = sum(1 for u in here if food_cost.get(u.type, 0) > 0)
+            ff = free_food(size)
+            cap, unlimited = size_cap(blds)
+            rows.append({
+                "miasto": str(r.get("name") or "?"),
+                "rozmiar": size,
+                "jednostek": len(here),
+                "jednostek_na_zywnosci": eaters,
+                "darmowe_utrzymanie_zywnosci": ff,
+                "zapas_do_limitu": ff - eaters,
+                "deficyt_zywnosci": max(0, eaters - ff),
+                "limit_wielkosci": "bez limitu" if unlimited else cap,
+                "zapas_zywnosci": int(r.get("food_stock") or 0),
+                "buduje": str(r.get("currently_building_name") or "") or None,
+            })
+        rows.sort(key=lambda x: (-x["deficyt_zywnosci"], x["zapas_do_limitu"]))
+
+        # ktore jednostki w ogole jedza
+        eat = sorted(n for n, c in food_cost.items() if c > 0)
+        free_eat = sorted(n for n, c in food_cost.items()
+                          if c == 0 and rs.units[n].build_cost > 0)
+        return {
+            "zasada_darmowego_utrzymania": (
+                f"{base} jednostek na żywności za darmo, +1 za każdy rozmiar "
+                f"od {steps[0] if steps else '-'} do {steps[-1] if steps else '-'}"),
+            "przyklad": {f"rozmiar {n}": free_food(n) for n in (4, 8, 12, 16, 20, 24)},
+            "jednostki_jedzace": eat[:40],
+            "jednostki_bez_zywnosci": free_eat[:20],
+            "miasta": rows,
+            "miast_z_deficytem": sum(1 for x in rows if x["deficyt_zywnosci"]),
+            "miast_na_granicy": sum(1 for x in rows if x["zapas_do_limitu"] == 0),
+        }
+
     # ------------------------------------------------------------ przejezdnosc
 
     def reachability(self, rs, unit_types: list[str], full: bool) -> dict:
@@ -715,6 +814,9 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_cities(self, args: dict) -> dict:
+        return self._need_intel().cities_audit(self._intel_ruleset())
 
     def ai_reach(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))

@@ -122,11 +122,11 @@ poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys)
 > Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
 > możesz użyć.
 
-**Czym asystent steruje** (15 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+**Czym asystent steruje** (16 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
 `ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
 `tabela_wytrzymalosci`, `dane_jednostki`, `spis`, oraz wywiad z zapisu gry:
 `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`,
-`porownaj_ustroje`, `przejezdnosc`.
+`porownaj_ustroje`, `przejezdnosc`, `audyt_miast`.
 
 Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
 zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
@@ -224,7 +224,19 @@ odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerkną
 w karty przeciwnika i o tym zapomnieć.
 
 Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
-`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`.
+`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`.
+
+### Audyt miast
+
+`audyt_miast` odpowiada na pytanie „czemu to miasto nie rośnie i ile jeszcze
+jednostek wyżywi". W `sandbox` i `civ2civ3` **darmowe utrzymanie żywnościowe
+rośnie razem z miastem**: 4 jednostki na start i +1 za każdy rozmiar od 5 do 20
+(powyżej 20 już nie rośnie). Limit wielkości podnoszą akwedukt (+8) i kanalizacja
+(bez limitu). Robotnicy, karawany i inżynierowie **nie jedzą** — kosztują tylko
+tarcze; prawie wszystkie jednostki bojowe jedzą po 1.
+
+Narzędzie czyta te progi wprost z `effects.ruleset` i pokazuje dla każdego
+miasta, ile ma jeszcze zapasu.
 
 ### Przejezdność terenu
 

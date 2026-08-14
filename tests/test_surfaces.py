@@ -359,6 +359,24 @@ def test_savegame():
           bool(front.get("fronty"))
           and "moje_najblizsze_miasta" in front["fronty"][0])
 
+    audit = dispatch(bridge, "audyt_miast", {})
+    check("audyt miast czyta próg darmowego utrzymania z reguł",
+          "za darmo" in audit.get("zasada_darmowego_utrzymania", ""),
+          audit.get("zasada_darmowego_utrzymania"))
+    check("darmowe utrzymanie rośnie z wielkością i się nasyca",
+          audit["przyklad"]["rozmiar 4"] < audit["przyklad"]["rozmiar 12"]
+          and audit["przyklad"]["rozmiar 20"] == audit["przyklad"]["rozmiar 24"],
+          str(audit["przyklad"]))
+    check("robotnicy i karawany nie jedzą",
+          "Caravan" in audit["jednostki_bez_zywnosci"]
+          and "Workers" in audit["jednostki_bez_zywnosci"])
+    check("jednostki bojowe jedzą",
+          "Catapult" in audit["jednostki_jedzace"]
+          and "Pikemen" in audit["jednostki_jedzace"])
+    check("liczy limit wzrostu z budynków",
+          all(c["limit_wielkosci"] for c in audit["miasta"]),
+          str(audit["miasta"][0]["limit_wielkosci"]))
+
     reach = dispatch(bridge, "przejezdnosc", {"jednostki": ["Catapult"]})
     kat = reach.get("jednostki", {}).get("Catapult")
     if kat:

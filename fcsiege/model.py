@@ -103,6 +103,7 @@ class UnitType:
     pop_cost: int
     move_rate: int
     uk_shield: int = 0
+    uk_food: int = 0
     flags: set[str] = field(default_factory=set)
     roles: set[str] = field(default_factory=set)
     reqs: list[Req] = field(default_factory=list)
@@ -301,6 +302,7 @@ class Ruleset:
                 pop_cost=sec.int("pop_cost"),
                 move_rate=sec.int("move_rate", 1),
                 uk_shield=sec.int("uk_shield"),
+                uk_food=sec.int("uk_food"),
                 flags=set(str(f) for f in sec.list("flags")),
                 roles=set(str(f) for f in sec.list("roles")),
                 reqs=self._reqs_from(sec),

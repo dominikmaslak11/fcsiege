@@ -33,6 +33,7 @@ class ScenarioBridge(Protocol):
     def ai_front(self, args: dict) -> dict: ...
     def ai_governments(self, args: dict) -> dict: ...
     def ai_reach(self, args: dict) -> dict: ...
+    def ai_cities(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -276,6 +277,20 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "audyt_miast",
+        "description": (
+            "Dla każdego twojego miasta: rozmiar, ile jednostek utrzymuje, ile "
+            "z nich zjada żywność, ile utrzyma jej za darmo i jaki ma limit "
+            "wzrostu. W wielu zestawach reguł darmowe utrzymanie żywnościowe "
+            "ROŚNIE razem z miastem, a limit wielkości podnoszą akwedukt "
+            "i kanalizacja — narzędzie czyta te progi wprost z reguł. Wywołaj, "
+            "gdy użytkownik pyta, czemu miasto nie rośnie, ile jeszcze jednostek "
+            "wyżywi albo czy warto rozbudowywać miasta."
+        ),
+        "input_schema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
         "name": "przejezdnosc",
         "description": (
             "Sprawdza, czy twoje jednostki w ogóle DOJDĄ do celów. W wielu "
@@ -360,6 +375,7 @@ TOOL_METHOD = {
     "linia_frontu": "ai_front",
     "porownaj_ustroje": "ai_governments",
     "przejezdnosc": "ai_reach",
+    "audyt_miast": "ai_cities",
 }
 
 
@@ -395,6 +411,8 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_governments(dict(args))
     if name == "przejezdnosc":
         return bridge.ai_reach(dict(args))
+    if name == "audyt_miast":
+        return bridge.ai_cities(dict(args))
     return {"blad": f"nieznane narzędzie: {name}"}
 
 
