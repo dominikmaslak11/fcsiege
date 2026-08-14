@@ -359,6 +359,24 @@ def test_savegame():
           bool(front.get("fronty"))
           and "moje_najblizsze_miasta" in front["fronty"][0])
 
+    govs = dispatch(bridge, "porownaj_ustroje",
+                    {"ustroje": ["Monarchy", "Republic", "Fundamentalism"]})
+    check("porównanie ustrojów zwraca wszystkie trzy",
+          set(govs.get("ustroje", {})) == {"Monarchy", "Republic", "Fundamentalism"})
+    mon = govs["ustroje"]["Monarchy"]
+    check("czyta wymagania technologiczne ustroju",
+          mon["wymaga_technologii"] == ["Monarchy"], str(mon["wymaga_technologii"]))
+    check("liczy utrzymanie wojsk z prawdziwego zapisu",
+          mon.get("utrzymanie_wojsk", {}).get("koszt_na_ture", 0) > 0,
+          str(mon.get("utrzymanie_wojsk")))
+    check("wie, których ustrojów jeszcze nie mam",
+          govs["ustroje"]["Republic"]["dostepny_teraz"] is not None)
+    check("liczy kary za wielkość imperium",
+          "poziomow_kary_przy_twoich_miastach" in mon.get("kara_za_wielkosc", {}))
+    check("Republika ma wyższy suwak niż Monarchia",
+          govs["ustroje"]["Republic"]["efekty"]["Max_Rates"]["wartosci"][0]["wartosc"]
+          > mon["efekty"]["Max_Rates"]["wartosci"][0]["wartosc"])
+
     miss = dispatch(bridge, "wywiad_o_nacji", {"nacja": "Marsjanie"})
     check("nieznana nacja daje czytelny błąd", "blad" in miss and "dostepne" in miss)
 

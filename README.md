@@ -122,10 +122,11 @@ poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys)
 > Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
 > możesz użyć.
 
-**Czym asystent steruje** (13 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+**Czym asystent steruje** (14 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
 `ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
 `tabela_wytrzymalosci`, `dane_jednostki`, `spis`, oraz wywiad z zapisu gry:
-`wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`.
+`wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`,
+`porownaj_ustroje`.
 
 Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
 zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
@@ -223,7 +224,16 @@ odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerkną
 w karty przeciwnika i o tym zapomnieć.
 
 Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
-`linia_frontu`.
+`linia_frontu`, `porownaj_ustroje`.
+
+### Porównanie ustrojów
+
+`porownaj_ustroje` czyta efekty ustrojów wprost z reguł (maksymalne suwaki,
+utrzymanie wojsk, kary za wielkość imperium, stan wojenny, niezadowolenie od
+wojsk w polu, marnotrawstwo, premie) i — jeśli jest wczytany zapis — przelicza
+je na twoją partię: ile realnie kosztowałoby utrzymanie **twoich** jednostek
+przy **twoim** rozkładzie na miasta, ile masz poziomów kary za wielkość
+i których technologii ci brakuje.
 
 ## Model walki
 

@@ -475,8 +475,186 @@ class IntelMixin:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
 
+    def ai_governments(self, args: dict) -> dict:
+        rs = self._intel_ruleset()
+        govs = args.get("ustroje") or None
+        if govs is not None:
+            govs = [str(g) for g in govs]
+        return government_comparison(rs, self._intel, govs)
+
     def ai_front(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().front(
             str(args.get("nacja", "")), full,
             int(args.get("promien") or 12))
+
+
+# ------------------------------------------------------------------ ustroje
+
+# Efekty, ktore realnie decyduja o oplacalnosci ustroju. Wartosci czytamy
+# z regul - nic nie jest tu zaszyte na sztywno poza doborem, co pokazac.
+GOV_EFFECTS = {
+    "Max_Rates": ("maks. suwak podatków/nauki (%)", "wyżej lepiej"),
+    "Empire_Size_Base": ("próg wielkości imperium", "wyżej lepiej"),
+    "Empire_Size_Step": ("co ile miast kolejna kara", "wyżej lepiej"),
+    "Martial_Law_Each": ("stan wojenny: ilu niezadowolonych uspokaja jednostka",
+                         "wyżej lepiej"),
+    "Martial_Law_Max": ("stan wojenny: maks. jednostek", "wyżej lepiej"),
+    "Make_Content_Mil": ("darmowe jednostki w polu (bez niezadowolenia)",
+                         "wyżej lepiej"),
+    "Revolution_Unhappiness": ("niezadowolenie za każdą jednostkę w polu",
+                               "niżej lepiej"),
+    "Unit_Upkeep_Free_Per_City": ("darmowe utrzymanie jednostek na miasto",
+                                  "wyżej lepiej"),
+    "Upkeep_Factor": ("mnożnik utrzymania jednostki", "niżej lepiej"),
+    "Output_Waste": ("marnotrawstwo produkcji/handlu (%)", "niżej lepiej"),
+    "Output_Bonus": ("premia do wytwarzania (%)", "wyżej lepiej"),
+    "Output_Inc_Tile": ("dodatkowy surowiec z kafla", "wyżej lepiej"),
+    "Civil_War_Chance": ("ryzyko wojny domowej (%)", "niżej lepiej"),
+    "Happiness_To_Gold": ("budynki szczęścia dają złoto zamiast zadowolenia", ""),
+    "Fanatics": ("dostęp do fanatyków (bez utrzymania)", ""),
+}
+
+
+def _gov_effect_values(rs, gov: str) -> dict[str, list[dict]]:
+    """Wartosci efektow obowiazujace pod danym ustrojem.
+
+    Uwzglednia zarowno efekty wymagajace tego ustroju, jak i te, ktore
+    wykluczaja inne ustroje (czyli obowiazuja rowniez ten).
+    """
+    all_govs = set(rs.governments)
+    out: dict[str, list[dict]] = {}
+    for eff in rs.effects:
+        if eff.type not in GOV_EFFECTS:
+            continue
+        pos = [r.name for r in eff.reqs if r.type == "Gov" and r.present]
+        neg = [r.name for r in eff.reqs if r.type == "Gov" and not r.present]
+        if pos and gov not in pos:
+            continue
+        if neg and gov in neg:
+            continue
+        if not pos and not neg:
+            continue                      # efekt globalny, nie rozroznia ustrojow
+        if neg and not pos and not (all_govs - set(neg)):
+            continue
+        extra = [f"{r.type}:{r.name}" for r in eff.reqs
+                 if r.type not in ("Gov",)]
+        out.setdefault(eff.type, []).append(
+            {"wartosc": eff.value, "warunki": extra})
+    return out
+
+
+def government_comparison(rs, intel: "Intel | None", govs: list[str] | None = None
+                          ) -> dict:
+    """Porownuje ustroje wg regul, a jesli jest wczytany zapis - takze wg
+    konkretnej sytuacji gracza (liczba miast, jednostek, znane technologie)."""
+    import collections
+
+    names = govs or list(rs.governments)
+    unknown = [g for g in names if g not in rs.governments]
+    names = [g for g in names if g in rs.governments]
+    out: dict = {"zestaw_regul": rs.name, "ustroje": {}}
+    if unknown:
+        out["nieznane_ustroje"] = unknown
+
+    # jakiej technologii wymaga ustroj
+    reqs: dict[str, list[str]] = {}
+    from .registry import parse_file
+    import os
+    path = os.path.join(rs.path, "governments.ruleset")
+    if os.path.exists(path):
+        reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+        for sec in reg.prefixed("government_"):
+            from .model import clean_name
+            gname = clean_name(sec.str("name"))
+            tbl = sec.table("reqs")
+            reqs[gname] = [str(r.get("name")) for r in tbl.dicts()
+                           if str(r.get("type", "")).lower() == "tech"] if tbl else []
+
+    for g in names:
+        entry: dict = {"wymaga_technologii": reqs.get(g, []),
+                       "efekty": {}}
+        for etype, rows in sorted(_gov_effect_values(rs, g).items()):
+            opis, kierunek = GOV_EFFECTS[etype]
+            entry["efekty"][etype] = {"opis": opis, "kierunek": kierunek,
+                                      "wartosci": rows}
+        out["ustroje"][g] = entry
+
+    if intel is None or intel.save.me is None:
+        out["uwaga"] = ("brak wczytanego zapisu — porównanie jest ogólne, "
+                        "bez liczb z twojej partii")
+        return out
+
+    save = intel.save
+    me = save.me
+    units = save.units_of(me.slot)
+    sec = save._sections[me.slot]
+    tbl = sec.table("c")
+    city_ids = {int(r["id"]) for r in tbl.dicts()} if tbl else set()
+    by_home = collections.Counter(u.homecity for u in units)
+
+    known = set()
+    research = save.reg.get("research")
+    sf = save.reg.get("savefile")
+    if research and sf:
+        rtbl = research.table("r")
+        vector = sf.list("technology_vector")
+        if rtbl and len(rtbl):
+            done = str(list(rtbl.dicts())[0].get("done") or "")
+            known = {vector[i] for i, ch in enumerate(done)
+                     if ch == "1" and i < len(vector)}
+
+    out["moja_sytuacja"] = {
+        "tura": save.turn, "obecny_ustroj": me.government,
+        "miast": len(city_ids), "jednostek": len(units),
+        "zloto": me.gold,
+    }
+
+    for g, entry in out["ustroje"].items():
+        need = entry["wymaga_technologii"]
+        entry["dostepny_teraz"] = all(t in known for t in need) if known else None
+        entry["brakujace_technologie"] = [t for t in need if t not in known] \
+            if known else []
+
+        eff = entry["efekty"]
+
+        def first(etype: str, default: int = 0) -> int:
+            rows = eff.get(etype, {}).get("wartosci", [])
+            plain = [r["wartosc"] for r in rows if not r["warunki"]]
+            return plain[0] if plain else default
+
+        free = 0
+        factor = 0
+        koszt_typ = "—"
+        for row in eff.get("Unit_Upkeep_Free_Per_City", {}).get("wartosci", []):
+            for w in row["warunki"]:
+                if w.startswith("OutputType:"):
+                    free = row["wartosc"]
+                    koszt_typ = w.split(":", 1)[1]
+        for row in eff.get("Upkeep_Factor", {}).get("wartosci", []):
+            for w in row["warunki"]:
+                if w == f"OutputType:{koszt_typ}":
+                    factor += row["wartosc"]
+        if koszt_typ != "—" and city_ids:
+            koszt = sum(max(0, by_home.get(c, 0) - free) * max(1, factor)
+                        for c in city_ids)
+            entry["utrzymanie_wojsk"] = {
+                "darmowych_na_miasto": free,
+                "mnoznik": max(1, factor),
+                "placisz_w": {"Gold": "złocie", "Shield": "tarczach"}.get(
+                    koszt_typ, koszt_typ),
+                "koszt_na_ture": koszt,
+            }
+
+        base = first("Empire_Size_Base")
+        step = first("Empire_Size_Step", base)
+        if base:
+            n = len(city_ids)
+            kary = 0 if n <= base else 1 + (n - base - 1) // max(1, step)
+            entry["kara_za_wielkosc"] = {
+                "prog": base, "krok": step,
+                "poziomow_kary_przy_twoich_miastach": kary,
+                "miast_do_kolejnej_kary": max(0, base + kary * step - n + 1)
+                if n > base else base - n + 1,
+            }
+    return out

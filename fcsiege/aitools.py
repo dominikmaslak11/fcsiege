@@ -31,6 +31,7 @@ class ScenarioBridge(Protocol):
     def ai_army(self, args: dict) -> dict: ...
     def ai_nation(self, args: dict) -> dict: ...
     def ai_front(self, args: dict) -> dict: ...
+    def ai_governments(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -274,6 +275,30 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "porownaj_ustroje",
+        "description": (
+            "Porównuje ustroje z aktualnego zestawu reguł: maksymalne suwaki, "
+            "utrzymanie wojsk, kary za wielkość imperium, stan wojenny, "
+            "niezadowolenie od wojsk w polu, marnotrawstwo i premie. Jeśli jest "
+            "wczytany zapis gry, liczy też realne skutki dla twojej partii "
+            "(koszt utrzymania twoich jednostek, ile masz poziomów kary za "
+            "wielkość, których technologii ci brakuje). Wywołaj, gdy użytkownik "
+            "pyta o zmianę ustroju albo o to, co się bardziej opłaca — nie "
+            "odpowiadaj z pamięci, zestawy reguł bardzo się tu różnią."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ustroje": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "które porównać, np. ['Monarchy','Republic']; "
+                                   "puste = wszystkie",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "linia_frontu",
         "description": (
             "Dla każdego miasta wskazanej nacji podaje twoje najbliższe miasta wraz "
@@ -309,6 +334,7 @@ TOOL_METHOD = {
     "moje_wojska": "ai_army",
     "wywiad_o_nacji": "ai_nation",
     "linia_frontu": "ai_front",
+    "porownaj_ustroje": "ai_governments",
 }
 
 
@@ -340,6 +366,8 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_nation(dict(args))
     if name == "linia_frontu":
         return bridge.ai_front(dict(args))
+    if name == "porownaj_ustroje":
+        return bridge.ai_governments(dict(args))
     return {"blad": f"nieznane narzędzie: {name}"}
 
 

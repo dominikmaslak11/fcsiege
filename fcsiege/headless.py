@@ -532,6 +532,9 @@ class HeadlessBridge(IntelMixin):
             return name
         return self.state.ruleset
 
+    def _intel_ruleset(self):
+        return self.rs
+
     def context_note(self) -> str:
         s = self.ai_snapshot()
         return (f"tryb={s['tryb']}, zestaw_regul={s['zestaw_regul']}, "

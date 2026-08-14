@@ -1918,6 +1918,10 @@ def _intel_apply_ruleset(self, name: str) -> str:
     return self.cmb_ruleset.currentText()
 
 
+def _intel_ruleset(self):
+    return self._rs
+
+
 def _install_ai_bridge() -> None:
     """Doklejа metody mostu do MainWindow (trzymane osobno dla czytelnosci)."""
     MainWindow.ai_run_tool = _ai_run_tool
@@ -1930,9 +1934,10 @@ def _install_ai_bridge() -> None:
     MainWindow.ai_catalog = _ai_catalog
     MainWindow.ai_unit = _ai_unit
     MainWindow._intel_apply_ruleset = _intel_apply_ruleset
+    MainWindow._intel_ruleset = _intel_ruleset
     # narzedzia wywiadu sa wspolne dla okna i trybu bez Qt
     for _name in ("_load_save", "_need_intel", "ai_savegame", "ai_army",
-                  "ai_nation", "ai_front"):
+                  "ai_nation", "ai_front", "ai_governments"):
         setattr(MainWindow, _name, getattr(IntelMixin, _name))
     MainWindow._intel = None
     MainWindow._intel_full = False
