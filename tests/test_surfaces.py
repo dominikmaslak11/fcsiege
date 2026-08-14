@@ -305,8 +305,67 @@ def test_control_socket(app, win):
     os.environ.pop("FCSIEGE_SOCKET", None)
 
 
+def test_savegame():
+    """Czytanie zapisu gry i respektowanie mgly wojny."""
+    print("\nCzytanie zapisow gry:")
+    from fcsiege.savegame import find_saves
+
+    saves = find_saves()
+    if not saves:
+        check("znaleziono zapis gry", False, "brak zapisów w ~/.freeciv/saves")
+        return
+    bridge = HeadlessBridge("classic")
+
+    mgla = dispatch(bridge, "wczytaj_zapis", {})
+    check("zapis się wczytał", "blad" not in mgla and mgla.get("tura", 0) > 0,
+          f"tura={mgla.get('tura')}")
+    check("zestaw reguł przestawiony na ten z zapisu",
+          mgla.get("zestaw_regul_ustawiony") == mgla.get("zestaw_regul"),
+          f"{mgla.get('zestaw_regul_ustawiony')} / {mgla.get('zestaw_regul')}")
+    check("domyślnie działa mgła wojny",
+          "mgła wojny" in mgla.get("tryb_wywiadu", ""), mgla.get("tryb_wywiadu"))
+    check("rozpoznano gracza ludzkiego", "ja" in mgla and mgla["ja"]["nacja"],
+          str(mgla.get("ja", {}).get("nacja")))
+
+    target = None
+    for row in mgla.get("dyplomacja", []):
+        if row["znane_miasta"] > 0:
+            target = row["nacja"]
+            break
+    check("znam jakieś obce miasta", target is not None, str(target))
+    if target is None:
+        return
+
+    fog = dispatch(bridge, "wywiad_o_nacji", {"nacja": target})
+    check("we mgle nie ma cudzych wojsk",
+          "wszystkie_wojska" not in fog and "czego_nie_wiem" in fog)
+    check("we mgle są odkryte miasta", len(fog.get("znane_miasta", [])) > 0)
+
+    cheat = dispatch(bridge, "wywiad_o_nacji", {"nacja": target, "pelny_wglad": True})
+    check("pełny wgląd ujawnia wojska i garnizony",
+          "wszystkie_wojska" in cheat and "garnizony" in cheat)
+    check("pełny wgląd jest wyraźnie oznaczony",
+          "chity" in cheat.get("tryb_wywiadu", ""), cheat.get("tryb_wywiadu"))
+    check("pełny wgląd zna nie mniej miast niż mgła",
+          len(cheat.get("wszystkie_miasta", [])) >= len(fog.get("znane_miasta", [])),
+          f"{len(cheat.get('wszystkie_miasta', []))} vs {len(fog.get('znane_miasta', []))}")
+
+    army = dispatch(bridge, "moje_wojska", {})
+    check("rozpiska własnej armii", army.get("razem_jednostek", 0) > 0,
+          f"{army.get('razem_jednostek')} jednostek")
+
+    front = dispatch(bridge, "linia_frontu", {"nacja": target})
+    check("linia frontu podaje dystanse",
+          bool(front.get("fronty"))
+          and "moje_najblizsze_miasta" in front["fronty"][0])
+
+    miss = dispatch(bridge, "wywiad_o_nacji", {"nacja": "Marsjanie"})
+    check("nieznana nacja daje czytelny błąd", "blad" in miss and "dostepne" in miss)
+
+
 if __name__ == "__main__":
     app, win = test_headless_matches_gui()
+    test_savegame()
     test_control_socket(app, win)
     test_mcp()
     test_http()

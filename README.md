@@ -122,9 +122,10 @@ poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys)
 > Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
 > możesz użyć.
 
-**Czym asystent steruje** (9 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+**Czym asystent steruje** (13 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
 `ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
-`tabela_wytrzymalosci`, `dane_jednostki`, `spis`.
+`tabela_wytrzymalosci`, `dane_jednostki`, `spis`, oraz wywiad z zapisu gry:
+`wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`.
 
 Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
 zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
@@ -198,6 +199,31 @@ Okno, MCP i API liczą tym samym kodem. Narzędzia są zdefiniowane raz
 na kontrolkach Qt, a `HeadlessBridge` na zwykłym obiekcie stanu. Test
 `test_headless_matches_gui` przepuszcza ten sam scenariusz przez oba i porównuje
 wyniki, więc nie mogą się rozjechać.
+
+## Bieżąca partia (czytanie zapisów gry)
+
+Zapisy Freeciva (`.sav`, `.sav.gz`, `.sav.xz`, `.sav.bz2`, `.sav.zst`) to **ten sam
+format secfile co pliki reguł**, więc czyta je ten sam parser. Zakładka
+**Bieżąca partia** wczytuje najnowszy zapis z `~/.freeciv/saves` i pokazuje turę,
+twoją nację, złoto, miasta, wojska i dyplomację — a asystent w czacie korzysta
+z tych samych danych, więc nie musisz mu opisywać sytuacji.
+
+### Mgła wojny
+
+Zapis zawiera stan **wszystkich** graczy, także tego, czego twoja cywilizacja nie
+widzi. Domyślnie narzędzie pokazuje wyłącznie twoją wiedzę:
+
+* twoje miasta i jednostki,
+* obce miasta, które masz odkryte (rozmiar, mury, czy obsadzone),
+* stany dyplomatyczne.
+
+Pole **„Pełny wgląd — świadomie chituję"** (i parametr `pelny_wglad=True`
+w narzędziach) ujawnia cudze wojska, garnizony i nieodkryte miasta. Każda
+odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerknąć
+w karty przeciwnika i o tym zapomnieć.
+
+Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
+`linia_frontu`.
 
 ## Model walki
 
@@ -295,6 +321,7 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/mcp_server.py` | serwer MCP (stdio) |
 | `fcsiege/http_api.py` | API HTTP + schemat OpenAPI |
 | `fcsiege/control.py` | gniazdo sterujące uruchomionym oknem |
+| `fcsiege/savegame.py` | czytanie zapisów gry + filtr mgły wojny |
 | `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
 | `fcsiege/aiclient.py` | poświadczenia i pętla rozmowy ze strumieniowaniem |
 | `fcsiege/chatpanel.py` | interfejs czatu i logowania |

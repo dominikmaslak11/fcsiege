@@ -18,6 +18,7 @@ from .advisor import (max_wave_stopped, min_defenders, rank_defenders,
 from .combat import (Side, Situation, defense_stand, duel, siege,
                      veteran_build_level)
 from .model import Ruleset, default_ruleset_roots, discover_rulesets
+from .savegame import IntelMixin
 
 MODE_ATTACK = "szturm"
 MODE_DEFENSE = "obrona"
@@ -56,7 +57,7 @@ class ScenarioState:
     enemy: list[dict] = field(default_factory=list)
 
 
-class HeadlessBridge:
+class HeadlessBridge(IntelMixin):
     """Realizuje ten sam protokol narzedziowy, co okno aplikacji."""
 
     def __init__(self, ruleset: str = "classic"):
@@ -523,6 +524,13 @@ class HeadlessBridge:
         }
 
     # -------------------------------------------------------------- pomocnicze
+
+    def _intel_apply_ruleset(self, name: str) -> str:
+        """Po wczytaniu zapisu przestawia kalkulator na jego zestaw regul."""
+        if name in self._dirs and name != self.state.ruleset:
+            self.load_ruleset(name)
+            return name
+        return self.state.ruleset
 
     def context_note(self) -> str:
         s = self.ai_snapshot()

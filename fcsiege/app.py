@@ -22,6 +22,7 @@ from .advisor import (counter_advice, defense_advice, max_wave_stopped,
 from .combat import (Side, Situation, defense_stand, duel, heals_fully_in_city,
                      siege, veteran_build_level)
 from .model import Ruleset, discover_rulesets, default_ruleset_roots
+from .savegame import IntelMixin
 from .widgets import (AnswerCard, Card, FlowRow, ModifierBars, PowerScale,
                       ProbabilityChart, StatTile)
 
@@ -477,6 +478,33 @@ class MainWindow(QWidget):
             "przy 95% pewności. Liczby dotyczą wybranej jednostki obronnej."))
         rp.addWidget(self.tbl_resilience)
 
+        self.game_page = QWidget()
+        gp = QVBoxLayout(self.game_page)
+        gp.setContentsMargins(4, 10, 4, 4)
+        gp.setSpacing(8)
+        grow = QHBoxLayout()
+        grow.setSpacing(8)
+        self.btn_load_save = QPushButton("Wczytaj najnowszy zapis")
+        self.btn_load_save.setObjectName("Primary")
+        self.btn_load_save.clicked.connect(self._on_load_save)
+        grow.addWidget(self.btn_load_save)
+        self.chk_cheat = QCheckBox("Pełny wgląd — świadomie chituję")
+        self.chk_cheat.setToolTip(
+            "Wyłączone: widzisz tylko to, co wie twoja cywilizacja (własne miasta "
+            "i wojska, odkryte miasta obcych).\n"
+            "Włączone: widzisz też wojska i miasta, których nie odkryłeś — to "
+            "świadome oszustwo wobec gry.")
+        self.chk_cheat.stateChanged.connect(self._on_cheat_toggled)
+        grow.addWidget(self.chk_cheat)
+        grow.addStretch(1)
+        gp.addLayout(grow)
+        self.lbl_game = QLabel("Nie wczytano zapisu.")
+        self.lbl_game.setObjectName("Hint")
+        self.lbl_game.setWordWrap(True)
+        self.lbl_game.setTextFormat(Qt.RichText)
+        self.lbl_game.setAlignment(Qt.AlignTop)
+        gp.addWidget(self.lbl_game, 1)
+
         self.tips_page = QWidget()
         tp = QVBoxLayout(self.tips_page)
         tp.setContentsMargins(4, 10, 4, 4)
@@ -641,6 +669,7 @@ class MainWindow(QWidget):
         else:
             pages.append((self.page_defenders, "Czym bronić"))
             pages.append((self.page_resilience, "Wytrzymałość"))
+        pages.append((self.game_page, "Bieżąca partia"))
         pages.append((self.tips_page, "Wskazówki"))
         for page, title in pages:
             page.setVisible(True)
@@ -1430,6 +1459,62 @@ class MainWindow(QWidget):
     def _on_tab_changed(self) -> None:
         self._refresh_active_tab()
 
+    def _on_cheat_toggled(self, _state=None) -> None:
+        self._intel_full = self.chk_cheat.isChecked()
+        if self._intel is not None:
+            self._render_game_panel(self._intel.summary(self._intel_full))
+
+    def _on_load_save(self) -> None:
+        self.lbl_game.setText("Wczytuję…")
+        QApplication.processEvents()
+        try:
+            summary = self.ai_savegame({"pelny_wglad": self.chk_cheat.isChecked()})
+        except Exception as exc:  # noqa: BLE001
+            self.lbl_game.setText(
+                f"<span style='color:{theme.BAD}'>Nie udało się wczytać: "
+                f"{type(exc).__name__}: {exc}</span>")
+            return
+        self._render_game_panel(summary)
+
+    def _render_game_panel(self, s: dict) -> None:
+        if "blad" in s:
+            self.lbl_game.setText(f"<span style='color:{theme.BAD}'>{s['blad']}</span>")
+            return
+        cheat = self.chk_cheat.isChecked()
+        tone = theme.BAD if cheat else theme.GOOD
+        me = s.get("ja", {})
+        html = [f"<div style='line-height:165%'>",
+                f"<p><b>{s['plik']}</b> — tura {s['tura']}, rok {s['rok']}, "
+                f"zestaw reguł <b>{s['zestaw_regul']}</b> "
+                f"(Freeciv {s.get('wersja_gry','?')})</p>",
+                f"<p style='color:{tone}'>● Tryb wywiadu: <b>{s['tryb_wywiadu']}</b></p>"]
+        if me:
+            html.append(
+                f"<p>Grasz jako <b>{me['przywodca']}</b> ({me['nacja']}), ustrój "
+                f"{me['ustroj']}, {me['zloto']} złota, {me['miast']} miast, "
+                f"{me['jednostek']} jednostek.</p>")
+        rows = s.get("dyplomacja", [])
+        if rows:
+            html.append("<p><b>Dyplomacja</b></p><table cellpadding='3'>")
+            html.append("<tr style='color:%s'><td>nacja</td><td>stan</td>"
+                        "<td>znanych miast</td>%s</tr>"
+                        % (theme.TEXT_FAINT,
+                           "<td>miast naprawdę</td><td>jednostek</td>" if cheat else ""))
+            for r in rows:
+                extra = ("<td align='right'>%s</td><td align='right'>%s</td>"
+                         % (r.get("miast_naprawde", "?"),
+                            r.get("jednostek_naprawde", "?"))) if cheat else ""
+                colour = theme.BAD if r["stan"] == "War" else (
+                    theme.GOOD if r["stan"] == "Alliance" else theme.TEXT_DIM)
+                html.append(f"<tr><td>{r['nacja']}</td>"
+                            f"<td style='color:{colour}'>{r['stan']}</td>"
+                            f"<td align='right'>{r['znane_miasta']}</td>{extra}</tr>")
+            html.append("</table>")
+        html.append("<p style='color:%s'>Asystent w czacie korzysta z tego samego "
+                    "wczytanego zapisu i tego samego trybu wywiadu.</p></div>"
+                    % theme.TEXT_FAINT)
+        self.lbl_game.setText("".join(html))
+
     def _on_rank_filter(self) -> None:
         self._rank_cache_valid = False
         self._refresh_active_tab()
@@ -1825,6 +1910,14 @@ def _ai_unit(self, name: str) -> dict:
     }
 
 
+def _intel_apply_ruleset(self, name: str) -> str:
+    """Po wczytaniu zapisu przestawia okno na zestaw regul z zapisu."""
+    i = self.cmb_ruleset.findText(name)
+    if i >= 0 and self.cmb_ruleset.currentText() != name:
+        self.cmb_ruleset.setCurrentIndex(i)
+    return self.cmb_ruleset.currentText()
+
+
 def _install_ai_bridge() -> None:
     """Doklejа metody mostu do MainWindow (trzymane osobno dla czytelnosci)."""
     MainWindow.ai_run_tool = _ai_run_tool
@@ -1836,6 +1929,13 @@ def _install_ai_bridge() -> None:
     MainWindow.ai_resilience = _ai_resilience
     MainWindow.ai_catalog = _ai_catalog
     MainWindow.ai_unit = _ai_unit
+    MainWindow._intel_apply_ruleset = _intel_apply_ruleset
+    # narzedzia wywiadu sa wspolne dla okna i trybu bez Qt
+    for _name in ("_load_save", "_need_intel", "ai_savegame", "ai_army",
+                  "ai_nation", "ai_front"):
+        setattr(MainWindow, _name, getattr(IntelMixin, _name))
+    MainWindow._intel = None
+    MainWindow._intel_full = False
 
 
 _install_ai_bridge()

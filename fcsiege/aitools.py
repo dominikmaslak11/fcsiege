@@ -27,6 +27,10 @@ class ScenarioBridge(Protocol):
     def ai_resilience(self) -> dict: ...
     def ai_catalog(self, what: str) -> dict: ...
     def ai_unit(self, name: str) -> dict: ...
+    def ai_savegame(self, args: dict) -> dict: ...
+    def ai_army(self, args: dict) -> dict: ...
+    def ai_nation(self, args: dict) -> dict: ...
+    def ai_front(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -215,6 +219,79 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "wczytaj_zapis",
+        "description": (
+            "Wczytuje zapis gry Freeciva (domyślnie najnowszy z ~/.freeciv/saves) "
+            "i zwraca sytuację: tura, twoja nacja, złoto, liczba miast i wojsk, "
+            "stany dyplomatyczne. Ustawia też zestaw reguł zgodny z zapisem. "
+            "Wywołaj to na początku każdej rozmowy o bieżącej partii — dzięki temu "
+            "nie musisz pytać użytkownika o liczby, które są w zapisie.\n\n"
+            "MGŁA WOJNY: domyślnie widzisz wyłącznie to, co wie gracz (własne "
+            "miasta i wojska, odkryte miasta obcych, dyplomacja). Parametr "
+            "pelny_wglad=True ujawnia wszystko, co jest w zapisie, łącznie z "
+            "wojskami i miastami, których gracz nie odkrył — to świadome "
+            "oszustwo wobec gry i wolno go użyć TYLKO gdy użytkownik wprost o to "
+            "poprosi. Zawsze mów w odpowiedzi, w którym trybie liczysz."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sciezka": {"type": "string",
+                            "description": "ścieżka do pliku zapisu; pusta = najnowszy"},
+                "pelny_wglad": {"type": "boolean",
+                                "description": "True = pokaż też to, czego gracz nie widzi (chity)"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "moje_wojska",
+        "description": (
+            "Rozpiska twojej armii z wczytanego zapisu: ile jednostek każdego typu, "
+            "na jakich stopniach weterana, ile rannych, oraz co budują twoje miasta. "
+            "Wywołaj, zanim doradzisz, co rekrutować — żeby wiedzieć, co gracz już ma."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "wywiad_o_nacji",
+        "description": (
+            "Co wiadomo o wskazanej nacji: stan dyplomatyczny i odkryte miasta wraz "
+            "z rozmiarem, murami i tym, czy są obsadzone. Wywołaj przed planowaniem "
+            "ofensywy albo oceną zagrożenia.\n\n"
+            "Przy pelny_wglad=True dochodzą ich wszystkie miasta, całe wojsko i skład "
+            "garnizonów — to świadome oszustwo, użyj tylko na wyraźną prośbę."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nacja": {"type": "string", "description": "np. Hittite albo Labarnas"},
+                "pelny_wglad": {"type": "boolean"},
+            },
+            "required": ["nacja"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "linia_frontu",
+        "description": (
+            "Dla każdego miasta wskazanej nacji podaje twoje najbliższe miasta wraz "
+            "z dystansem oraz twoje jednostki w promieniu. Wywołaj, gdy planujesz, "
+            "skąd poprowadzić natarcie, gdzie ustawić front albo czy zdążysz "
+            "przerzucić wojsko."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nacja": {"type": "string"},
+                "promien": {"type": "integer", "description": "w kaflach, domyślnie 12"},
+                "pelny_wglad": {"type": "boolean"},
+            },
+            "required": ["nacja"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -228,6 +305,10 @@ TOOL_METHOD = {
     "tabela_wytrzymalosci": "ai_resilience",
     "dane_jednostki": "ai_unit",
     "spis": "ai_catalog",
+    "wczytaj_zapis": "ai_savegame",
+    "moje_wojska": "ai_army",
+    "wywiad_o_nacji": "ai_nation",
+    "linia_frontu": "ai_front",
 }
 
 
@@ -251,6 +332,14 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_unit(str(args.get("jednostka", "")))
     if name == "spis":
         return bridge.ai_catalog(str(args.get("czego", "jednostki")))
+    if name == "wczytaj_zapis":
+        return bridge.ai_savegame(dict(args))
+    if name == "moje_wojska":
+        return bridge.ai_army(dict(args))
+    if name == "wywiad_o_nacji":
+        return bridge.ai_nation(dict(args))
+    if name == "linia_frontu":
+        return bridge.ai_front(dict(args))
     return {"blad": f"nieznane narzędzie: {name}"}
 
 
@@ -281,6 +370,14 @@ Zasady pracy:
   uzasadnienie. Liczby podawaj z jednostkami („13 katapult”, „5,9 tarcz”).
 - Gdy pytanie opiera się na błędnym założeniu o mechanice gry, powiedz to wprost
   i policz to, co faktycznie ma znaczenie.
+
+Bieżąca partia:
+- Gdy użytkownik pyta o swoją grę („planuję ofensywę”, „czy zdążę”, „co budować”),
+  zacznij od `wczytaj_zapis` — zapis zawiera turę, twoje wojska, miasta
+  i dyplomację, więc nie musisz o to pytać.
+- Domyślnie widzisz tylko wiedzę gracza. Pełny wgląd (`pelny_wglad=True`) to
+  świadome oszustwo wobec gry — użyj go wyłącznie, gdy użytkownik wprost o to
+  poprosi, i zawsze napisz, w którym trybie liczysz.
 
 Mechanika, o której warto pamiętać:
 - Teren, z którego atakujesz, NIE zmienia siły ataku. Liczy się wyłącznie kafel
