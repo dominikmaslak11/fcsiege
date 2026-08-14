@@ -122,11 +122,11 @@ poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys)
 > Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
 > możesz użyć.
 
-**Czym asystent steruje** (14 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+**Czym asystent steruje** (15 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
 `ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
 `tabela_wytrzymalosci`, `dane_jednostki`, `spis`, oraz wywiad z zapisu gry:
 `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`,
-`porownaj_ustroje`.
+`porownaj_ustroje`, `przejezdnosc`.
 
 Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
 zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
@@ -224,7 +224,20 @@ odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerkną
 w karty przeciwnika i o tym zapomnieć.
 
 Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
-`linia_frontu`, `porownaj_ustroje`.
+`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`.
+
+### Przejezdność terenu
+
+`przejezdnosc` odpowiada na pytanie, które łatwo przeoczyć: **czy jednostka
+w ogóle dojdzie do celu**. W `sandbox` i `civ2civ3` katapulty i działa należą do
+klasy **Big Land**, która nie wchodzi na bagna, dżunglę ani góry — chyba że leży
+tam droga, kolej albo **rzeka** (wszystkie mają flagę `NativeTile`), a każde
+miasto ma drogę z automatu.
+
+Narzędzie czyta warstwy dróg i rzek wprost z zapisu, wyznacza spójne obszary
+przejezdne dla danej klasy i mówi, ile twoich jednostek stoi w którym obszarze
+oraz do których miast wroga faktycznie dotrą. Najsilniejsza jednostka jest
+bezużyteczna, jeśli utknie po drugiej stronie bagna.
 
 ### Porównanie ustrojów
 

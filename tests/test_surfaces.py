@@ -359,6 +359,23 @@ def test_savegame():
           bool(front.get("fronty"))
           and "moje_najblizsze_miasta" in front["fronty"][0])
 
+    reach = dispatch(bridge, "przejezdnosc", {"jednostki": ["Catapult"]})
+    kat = reach.get("jednostki", {}).get("Catapult")
+    if kat:
+        check("rozpoznaje klasę ciężkiej jednostki", kat["klasa"] == "Big Land",
+              kat["klasa"])
+        check("wie, że Big Land nie wejdzie na bagna i góry bez drogi",
+              {"Swamp", "Mountains", "Jungle"} <= set(kat["nie_wchodzi_bez_drogi"]),
+              str(kat["nie_wchodzi_bez_drogi"]))
+        check("liczy obszary przejezdne i sztuki w nich",
+              bool(kat["moje_sztuki_wg_obszaru"]))
+    piech = dispatch(bridge, "przejezdnosc", {"jednostki": ["Pikemen"]})
+    pk = piech.get("jednostki", {}).get("Pikemen")
+    if pk:
+        check("zwykła piechota wchodzi wszędzie poza Inaccessible",
+              pk["nie_wchodzi_bez_drogi"] == ["Inaccessible"],
+              str(pk["nie_wchodzi_bez_drogi"]))
+
     govs = dispatch(bridge, "porownaj_ustroje",
                     {"ustroje": ["Monarchy", "Republic", "Fundamentalism"]})
     check("porównanie ustrojów zwraca wszystkie trzy",

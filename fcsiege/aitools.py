@@ -32,6 +32,7 @@ class ScenarioBridge(Protocol):
     def ai_nation(self, args: dict) -> dict: ...
     def ai_front(self, args: dict) -> dict: ...
     def ai_governments(self, args: dict) -> dict: ...
+    def ai_reach(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -275,6 +276,29 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "przejezdnosc",
+        "description": (
+            "Sprawdza, czy twoje jednostki w ogóle DOJDĄ do celów. W wielu "
+            "zestawach reguł ciężkie jednostki (klasa Big Land: katapulty, "
+            "działa) nie wchodzą na bagna, dżunglę i góry bez drogi — droga, "
+            "kolej i rzeka liczą się jako przejezdne, a każde miasto ma drogę "
+            "z automatu. Zwraca, po jakim terenie dana jednostka chodzi, ile "
+            "twoich sztuk stoi w którym obszarze przejezdnym i do których miast "
+            "wroga faktycznie dotrą.\n\n"
+            "Wywołaj ZAWSZE przed planowaniem ofensywy ciężkimi jednostkami — "
+            "sama siła ataku nic nie znaczy, jeśli jednostka nie dojdzie."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "jednostki": {"type": "array", "items": {"type": "string"},
+                              "description": "np. ['Catapult','Knights']; puste = wszystkie twoje typy"},
+                "pelny_wglad": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "porownaj_ustroje",
         "description": (
             "Porównuje ustroje z aktualnego zestawu reguł: maksymalne suwaki, "
@@ -335,6 +359,7 @@ TOOL_METHOD = {
     "wywiad_o_nacji": "ai_nation",
     "linia_frontu": "ai_front",
     "porownaj_ustroje": "ai_governments",
+    "przejezdnosc": "ai_reach",
 }
 
 
@@ -368,6 +393,8 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_front(dict(args))
     if name == "porownaj_ustroje":
         return bridge.ai_governments(dict(args))
+    if name == "przejezdnosc":
+        return bridge.ai_reach(dict(args))
     return {"blad": f"nieznane narzędzie: {name}"}
 
 
@@ -408,6 +435,9 @@ Bieżąca partia:
   poprosi, i zawsze napisz, w którym trybie liczysz.
 
 Mechanika, o której warto pamiętać:
+- Zanim doradzisz ofensywę ciężkimi jednostkami, sprawdź `przejezdnosc`. Klasa
+  Big Land (katapulty, działa) nie wchodzi na bagna, dżunglę i góry bez drogi —
+  najsilniejsza jednostka jest bezużyteczna, jeśli nie dojdzie do celu.
 - Teren, z którego atakujesz, NIE zmienia siły ataku. Liczy się wyłącznie kafel
   obrońcy. Kafel atakującego decyduje o koszcie ruchu i o tym, jak przeżyjesz
   kontratak.

@@ -252,6 +252,97 @@ class Save:
         ) for row in tbl.dicts()]
 
 
+# ----------------------------------------------------------- mapa i ruch
+
+class TerrainMap:
+    """Teren i ulepszenia z zapisu - potrzebne do liczenia przejezdnosci."""
+
+    def __init__(self, save: "Save"):
+        m = save.reg.get("map")
+        sf = save.reg.get("savefile")
+        self._m = m
+        ti = sf.table("terrident") if sf else None
+        self.ident = {str(r["identifier"]): str(r["name"]) for r in ti} if ti else {}
+        self.extras = {n: i for i, n in enumerate(sf.list("extras_vector"))} if sf else {}
+        self.rows = []
+        y = 0
+        while True:
+            row = m.get(f"t{y:04d}") if m else None
+            if row is None:
+                break
+            self.rows.append(str(row))
+            y += 1
+        self.height = len(self.rows)
+        self.width = max((len(r) for r in self.rows), default=0)
+
+    def terrain(self, x: int, y: int) -> str | None:
+        if not (0 <= y < self.height) or x >= len(self.rows[y]) or x < 0:
+            return None
+        return self.ident.get(self.rows[y][x])
+
+    def has_extra(self, name: str, x: int, y: int) -> bool:
+        i = self.extras.get(name)
+        if i is None:
+            return False
+        row = str(self._m.get(f"e{i // 4:02d}_{y:04d}") or "")
+        if x >= len(row) or x < 0:
+            return False
+        try:
+            return bool(int(row[x], 16) & (1 << (i % 4)))
+        except ValueError:
+            return False
+
+    def has_road(self, x: int, y: int) -> bool:
+        """Droga, kolej, maglev albo rzeka - wszystkie sa 'NativeTile'."""
+        return any(self.has_extra(n, x, y)
+                   for n in ("Road", "Railroad", "Maglev", "River"))
+
+
+def passability(rs, tmap: TerrainMap, uclass: str):
+    """Zwraca funkcje (x,y)->bool: czy jednostka tej klasy moze tam stanac.
+
+    Kafel jest przejezdny, gdy teren jest natywny dla klasy albo lezy na nim
+    ulepszenie z flaga NativeTile (droga, kolej, rzeka).
+    """
+    native = {t.name for t in rs.terrains.values() if uclass in t.native_to}
+
+    def ok(x: int, y: int) -> bool:
+        t = tmap.terrain(x, y)
+        if t is None:
+            return False
+        terr = rs.terrains.get(t)
+        if terr is None or not terr.is_land:
+            return False
+        return t in native or tmap.has_road(x, y)
+
+    return ok
+
+
+def regions(tmap: TerrainMap, passable) -> dict[tuple[int, int], int]:
+    """Spojne obszary przejezdne (8-kierunkowo, mapa zawinieta w poziomie)."""
+    seen: dict[tuple[int, int], int] = {}
+    cid = 0
+    W, H = tmap.width, tmap.height
+    for y in range(H):
+        for x in range(len(tmap.rows[y])):
+            if (x, y) in seen or not passable(x, y):
+                continue
+            cid += 1
+            stack = [(x, y)]
+            seen[(x, y)] = cid
+            while stack:
+                cx, cy = stack.pop()
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        if dx == dy == 0:
+                            continue
+                        nx, ny = (cx + dx) % W, cy + dy
+                        if 0 <= ny < H and (nx, ny) not in seen and passable(nx, ny):
+                            seen[(nx, ny)] = cid
+                            stack.append((nx, ny))
+    return seen
+
+
 # ------------------------------------------------------------------ wywiad
 
 def _distance(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -385,6 +476,70 @@ class Intel:
         out["garnizony"] = garrisons
         return out
 
+    # ------------------------------------------------------------ przejezdnosc
+
+    def reachability(self, rs, unit_types: list[str], full: bool) -> dict:
+        """Czy jednostki danych typow w ogole dojda do celow.
+
+        Klasy takie jak "Big Land" (katapulty, dziala) nie wchodza na bagna,
+        dzungle i gory bez drogi - to czesto wazniejsze niz sama sila ataku.
+        """
+        import collections
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        my_units = s.units_of(s.me.slot)
+
+        types = unit_types or sorted({u.type for u in my_units})
+        out: dict = {"tryb_wywiadu": "pełny wgląd (świadome chity)" if full
+                     else "tylko moja wiedza (mgła wojny)", "jednostki": {}}
+
+        targets = []
+        for p in s.players.values():
+            if s.me and p.slot == s.me.slot:
+                continue
+            cs = s.cities_of(p.slot) if full else [
+                c for c in s.known_cities() if c.owner == p.slot]
+            for c in cs:
+                targets.append((p.nation, c.name, c.x, c.y))
+
+        for tname in types:
+            ut = rs.units.get(tname)
+            if ut is None:
+                continue
+            uclass = rs.uclass_of(ut).name
+            ok = passability(rs, tmap, uclass)
+            reg = regions(tmap, ok)
+            mine = [u for u in my_units if u.type == tname]
+            where = collections.Counter(reg.get((u.x, u.y), 0) for u in mine)
+            entry = {
+                "klasa": uclass,
+                "sztuk": len(mine),
+                "wchodzi_na": sorted(t.name for t in rs.terrains.values()
+                                     if uclass in t.native_to and t.is_land),
+                "nie_wchodzi_bez_drogi": sorted(
+                    t.name for t in rs.terrains.values()
+                    if t.is_land and uclass not in t.native_to),
+                "moje_sztuki_wg_obszaru": [
+                    {"obszar": k, "sztuk": v} for k, v in where.most_common()],
+                "cele": [],
+            }
+            for nation, cname, x, y in targets:
+                z = reg.get((x, y), 0)
+                entry["cele"].append({
+                    "nacja": nation, "miasto": cname,
+                    "teren": tmap.terrain(x, y),
+                    "obszar": z,
+                    "moich_sztuk_w_tym_obszarze": where.get(z, 0),
+                    "dojda": where.get(z, 0) > 0,
+                })
+            entry["odcietych_sztuk"] = sum(
+                v for k, v in where.items()
+                if not any(c["obszar"] == k for c in entry["cele"]))
+            out["jednostki"][tname] = entry
+        return out
+
     # --------------------------------------------------------------- dystans
 
     def front(self, target: str, full: bool, max_distance: int = 12) -> dict:
@@ -474,6 +629,12 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_reach(self, args: dict) -> dict:
+        full = bool(args.get("pelny_wglad", self._intel_full))
+        types = args.get("jednostki") or []
+        return self._need_intel().reachability(
+            self._intel_ruleset(), [str(t) for t in types], full)
 
     def ai_governments(self, args: dict) -> dict:
         rs = self._intel_ruleset()
