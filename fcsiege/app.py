@@ -112,6 +112,7 @@ class MainWindow(QWidget):
         self._last_result = None
         self._ai_last: dict = {}
         self.chat: object | None = None
+        self._control: object | None = None
 
         self._build_ui()
         self._discover_rulesets()
@@ -557,9 +558,23 @@ class MainWindow(QWidget):
         else:
             self.setMinimumWidth(1180)
 
+    def start_control_server(self) -> bool:
+        """Otwiera lokalne gniazdo, przez ktore MCP i API sterują tym oknem."""
+        from .control import ControlServer
+        try:
+            self._control = ControlServer(self)
+        except OSError as exc:
+            print(f"FCSiege: nie udało się otworzyć gniazda sterującego: {exc}",
+                  file=sys.stderr)
+            return False
+        print(f"FCSiege: gniazdo sterujące na {self._control.path}", file=sys.stderr)
+        return True
+
     def closeEvent(self, ev):  # noqa: N802 - API Qt
         if self.chat is not None:
             self.chat.shutdown()
+        if getattr(self, "_control", None) is not None:
+            self._control.close()
         super().closeEvent(ev)
 
     # ------------------------------------------------------------ tryb pracy
@@ -721,7 +736,9 @@ class MainWindow(QWidget):
 
         attackers = sorted([u for u in avail if u.attack > 0 and "NonMil" not in u.flags],
                            key=lambda u: (rs.unit_tech_depth(u), u.name))
-        defenders = sorted([u for u in avail if u.defense > 0 and "NonMil" not in u.flags],
+        # jednostki niebojowe (osadnicy, robotnicy, karawany) nie atakują, ale
+        # stoją w miastach i trzeba je wybić - muszą być na liście obrońców
+        defenders = sorted([u for u in avail if u.defense > 0],
                            key=lambda u: (rs.unit_tech_depth(u), u.name))
 
         depth = self.sld_tech.value()
@@ -1468,7 +1485,7 @@ class MainWindow(QWidget):
         self.lbl_tips.setText("")
 
 
-def main() -> int:
+def main(control: bool = False) -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("FCSiege")
     font = QFont()
@@ -1476,6 +1493,8 @@ def main() -> int:
     app.setFont(font)
     app.setStyleSheet(theme.stylesheet())
     win = MainWindow()
+    if control:
+        win.start_control_server()
     win.show()
     return app.exec()
 

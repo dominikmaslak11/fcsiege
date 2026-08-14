@@ -20,11 +20,21 @@ zestawu reguł, na którym grasz.
 git clone https://github.com/dominikmaslak11/fcsiege.git
 cd fcsiege
 pip install PySide6 numpy      # jeśli jeszcze ich nie masz
-pip install anthropic          # opcjonalnie: asystent
+pip install anthropic mcp      # opcjonalnie: asystent i serwer MCP
 python3 fcsiege.py
 ```
 
-Wymaga Pythona 3.10+. Bez pakietu `anthropic` wszystko poza czatem działa normalnie.
+Wymaga Pythona 3.10+. Bez `anthropic` działa wszystko poza czatem, bez `mcp` —
+wszystko poza serwerem MCP.
+
+Cztery sposoby uruchomienia:
+
+```bash
+python3 fcsiege.py             # okno aplikacji
+python3 fcsiege.py --control   # okno + gniazdo sterujące (dla MCP i API)
+python3 fcsiege.py mcp         # serwer MCP po stdio
+python3 fcsiege.py api         # API HTTP na 127.0.0.1:8765
+```
 
 ## Skąd biorą się liczby
 
@@ -124,6 +134,71 @@ w wątku interfejsu, więc czat i klikanie nigdy nie rozjeżdżają się ze sob�
 budowle) trafiają do API Anthropic. Bez otwarcia czatu aplikacja nie łączy się
 z siecią w ogóle.
 
+## Serwer MCP
+
+Ten sam kalkulator jako serwer [MCP](https://modelcontextprotocol.io/) — Claude
+Code, Claude Desktop czy dowolny inny klient MCP może liczyć scenariusze bez
+otwierania aplikacji.
+
+```bash
+claude mcp add fcsiege -- python3 /ścieżka/do/fcsiege/fcsiege.py mcp --ruleset sandbox
+```
+
+Konfiguracja Claude Desktop (`~/.config/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "fcsiege": {
+      "command": "python3",
+      "args": ["/ścieżka/do/fcsiege/fcsiege.py", "mcp", "--ruleset", "sandbox"]
+    }
+  }
+}
+```
+
+Domyślnie (`--attach auto`) serwer liczy we własnym stanie. Jeśli jednak
+aplikacja działa z `--control`, narzędzia idą do niej — wtedy **Claude przestawia
+kontrolki w oknie, które masz przed sobą**, a wynik mówi, skąd pochodzi
+(pole `zrodlo`). `--attach nigdy` wymusza tryb lokalny.
+
+## API HTTP
+
+Dla skryptów, botów i wszystkiego, co nie mówi po MCP. Tylko biblioteka
+standardowa, domyślnie nasłuchuje wyłącznie na `127.0.0.1`.
+
+```bash
+python3 fcsiege.py api --port 8765 --token tajne
+```
+
+```bash
+curl -s localhost:8765/policz -H "Authorization: Bearer tajne" \
+  -H 'Content-Type: application/json' -d '{"scenariusz":{
+    "tryb":"szturm","teren_miasta":"Hills","budowle":["City Walls"],
+    "moja_jednostka":{"jednostka":"Catapult"},
+    "sily_wroga":[{"jednostka":"Warriors","liczba":5}]}}'
+```
+
+| ścieżka | co robi |
+|---|---|
+| `GET /zdrowie` | czy żyje i skąd liczy |
+| `GET /narzedzia` | definicje narzędzi (te same, co w MCP) |
+| `GET /openapi.json` | schemat OpenAPI 3.1 wygenerowany z definicji |
+| `GET /stan` | obecny scenariusz |
+| `POST /narzedzie/<nazwa>` | wywołanie narzędzia, ciało = argumenty |
+| `POST /policz` | skrót: ustawia scenariusz i od razu liczy |
+
+Token jest opcjonalny lokalnie, ale wymagany, jeśli wystawiasz `--host` poza
+localhost — serwer ostrzega, gdy tego nie zrobisz.
+
+## Jeden silnik, trzy powierzchnie
+
+Okno, MCP i API liczą tym samym kodem. Narzędzia są zdefiniowane raz
+(`aitools.TOOL_SPECS`) i realizowane przez dwa „mosty”: okno aplikacji operuje
+na kontrolkach Qt, a `HeadlessBridge` na zwykłym obiekcie stanu. Test
+`test_headless_matches_gui` przepuszcza ten sam scenariusz przez oba i porównuje
+wyniki, więc nie mogą się rozjechać.
+
 ## Model walki
 
 Za `common/combat.c`:
@@ -172,7 +247,13 @@ Oba tryby to ten sam model widziany z dwóch stron; test
 ```bash
 python3 tests/test_combat.py    # silnik walki
 python3 tests/test_chat.py      # asystent (bez sieci, klient podstawiony)
+python3 tests/test_surfaces.py  # MCP, API HTTP, gniazdo sterujące
 ```
+
+`test_surfaces.py` sprawdza zgodność silnika bez Qt z oknem, uruchamia serwer MCP
+i rozmawia z nim **prawdziwym klientem MCP** po stdio, wysyła **prawdziwe żądania
+HTTP** do API (włącznie z odmową bez tokenu) oraz steruje otwartym oknem przez
+gniazdo. Żaden test nie wychodzi do sieci.
 
 `test_chat.py` sprawdza schematy narzędzi, most do interfejsu (czy narzędzie
 naprawdę przestawia kontrolkę i czy zwraca te same liczby co karta odpowiedzi),
@@ -210,6 +291,10 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/widgets.py` | rysowane ręcznie: karta odpowiedzi, wykres, paski sił |
 | `fcsiege/theme.py` | paleta i arkusz stylów |
 | `fcsiege/app.py` | okno główne + most dla asystenta |
+| `fcsiege/headless.py` | ten sam kalkulator bez Qt (rdzeń dla MCP i API) |
+| `fcsiege/mcp_server.py` | serwer MCP (stdio) |
+| `fcsiege/http_api.py` | API HTTP + schemat OpenAPI |
+| `fcsiege/control.py` | gniazdo sterujące uruchomionym oknem |
 | `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
 | `fcsiege/aiclient.py` | poświadczenia i pętla rozmowy ze strumieniowaniem |
 | `fcsiege/chatpanel.py` | interfejs czatu i logowania |
