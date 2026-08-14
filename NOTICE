@@ -1,0 +1,26 @@
+FCSiege — kalkulator szturmu i obrony miasta dla Freeciva
+Copyright (C) 2026 Dominik Maslak
+
+Ten program jest wolnym oprogramowaniem na licencji GNU General Public
+License w wersji 2 lub dowolnej pozniejszej (patrz plik LICENSE).
+
+
+Dane zestawow regul
+-------------------
+Katalog data/rulesets/ zawiera niezmienione pliki .ruleset pochodzace
+z projektu Freeciv (wersja 3.2.5), rozpowszechniane na tej samej licencji
+GNU GPL w wersji 2 lub pozniejszej.
+
+    Freeciv — Copyright (C) 1996-2025 Freeciv contributors
+    https://www.freeciv.org/
+    https://github.com/freeciv/freeciv
+
+Zestawy: alien, civ1, civ2, civ2civ3, classic, multiplayer, sandbox.
+Pliki: units, terrain, buildings, effects, techs, game, cities, governments.
+
+Zaden plik graficzny, dzwiekowy ani kod zrodlowy Freeciva nie jest tu
+dolaczony — wylacznie tekstowe pliki regul, ktore aplikacja parsuje,
+aby liczyc walke zgodnie z zasadami gry.
+
+To wlasnie dlatego caly projekt jest na GPL-2.0-or-later: dolaczone dane
+sa objete ta licencja, wiec calosc dystrybucji musi ja zachowac.
