@@ -359,6 +359,27 @@ def test_savegame():
           bool(front.get("fronty"))
           and "moje_najblizsze_miasta" in front["fronty"][0])
 
+    plan = dispatch(bridge, "co_da_rozwiazanie", {})
+    check("czyta procent zwrotu z reguł",
+          0 < plan.get("zwrot_procent", 0) <= 100, str(plan.get("zwrot_procent")))
+    check("typuje kandydatów do rozwiązania", bool(plan.get("kandydaci")))
+    check("zwrot tarcz zgadza się z kosztem i procentem",
+          all(c["zwrot_tarcz"] == c["koszt_budowy"] * plan["zwrot_procent"] // 100
+              * c["sztuk"] for c in plan["kandydaci"]))
+    check("suma tarcz to suma kandydatów",
+          plan["razem_tarcz"] == sum(c["zwrot_tarcz"] for c in plan["kandydaci"]))
+    check("utrzymanie po rozwiązaniu nie rośnie",
+          plan["utrzymanie_po"] <= plan["utrzymanie_teraz"],
+          f"{plan['utrzymanie_teraz']} -> {plan['utrzymanie_po']}")
+    check("podpowiada, gdzie rozwiązać i co kupić",
+          bool(plan.get("gdzie_rozwiazac")) and bool(plan.get("co_za_to_kupisz")))
+    check("proponuje tylko budynki dostępne technologicznie",
+          all(x["ile_za_zwrot"] >= 0 for x in plan["co_za_to_kupisz"]))
+    only = dispatch(bridge, "co_da_rozwiazanie", {"jednostki": ["Catapult"]})
+    check("da się ograniczyć do wskazanego typu",
+          {c["jednostka"] for c in only["kandydaci"]} <= {"Catapult"},
+          str({c["jednostka"] for c in only["kandydaci"]}))
+
     audit = dispatch(bridge, "audyt_miast", {})
     check("audyt miast czyta próg darmowego utrzymania z reguł",
           "za darmo" in audit.get("zasada_darmowego_utrzymania", ""),

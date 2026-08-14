@@ -34,6 +34,7 @@ class ScenarioBridge(Protocol):
     def ai_governments(self, args: dict) -> dict: ...
     def ai_reach(self, args: dict) -> dict: ...
     def ai_cities(self, args: dict) -> dict: ...
+    def ai_disband(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -277,6 +278,28 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "co_da_rozwiazanie",
+        "description": (
+            "Liczy, co da rozwiązanie zbędnych jednostek: ile tarcz wróci "
+            "(procent zwrotu czytany z reguł), ile zaoszczędzisz na utrzymaniu "
+            "co turę, ile uwolni się żywności, w których miastach je rozwiązać, "
+            "żeby tarcze trafiły tam, gdzie brakuje budynku, i co za to kupisz. "
+            "Sam typuje kandydatów: jednostki odcięte od wszystkich celów (nie "
+            "dojdą do walki) oraz bezczynne jednostki cywilne. Wywołaj, gdy "
+            "użytkownik pyta o rozwiązywanie jednostek, o odzysk tarcz albo "
+            "narzeka na koszt utrzymania armii."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "jednostki": {"type": "array", "items": {"type": "string"},
+                              "description": "ogranicz do tych typów; puste = typuj sam"},
+                "pelny_wglad": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "audyt_miast",
         "description": (
             "Dla każdego twojego miasta: rozmiar, ile jednostek utrzymuje, ile "
@@ -376,6 +399,7 @@ TOOL_METHOD = {
     "porownaj_ustroje": "ai_governments",
     "przejezdnosc": "ai_reach",
     "audyt_miast": "ai_cities",
+    "co_da_rozwiazanie": "ai_disband",
 }
 
 
@@ -413,6 +437,8 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_reach(dict(args))
     if name == "audyt_miast":
         return bridge.ai_cities(dict(args))
+    if name == "co_da_rozwiazanie":
+        return bridge.ai_disband(dict(args))
     return {"blad": f"nieznane narzędzie: {name}"}
 
 

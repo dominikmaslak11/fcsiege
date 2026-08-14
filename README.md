@@ -122,11 +122,11 @@ poprosi o klucz z [console.claude.com](https://console.claude.com/settings/keys)
 > Anthropica. Aplikacja to wykrywa i mówi wprost, której drogi logowania
 > możesz użyć.
 
-**Czym asystent steruje** (16 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
+**Czym asystent steruje** (17 narzędzi): `pokaz_stan`, `ustaw_scenariusz`,
 `ustaw_moja_jednostke`, `ustaw_sily_wroga`, `policz`, `ranking`,
 `tabela_wytrzymalosci`, `dane_jednostki`, `spis`, oraz wywiad z zapisu gry:
 `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`, `linia_frontu`,
-`porownaj_ustroje`, `przejezdnosc`, `audyt_miast`.
+`porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`.
 
 Wszystkie liczby pochodzą z tego samego silnika co panele — prompt systemowy
 zabrania modelowi szacowania wyników walki z pamięci. Narzędzia wykonują się
@@ -224,7 +224,22 @@ odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerkną
 w karty przeciwnika i o tym zapomnieć.
 
 Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
-`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`.
+`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`.
+
+### Co da rozwiązanie jednostek
+
+`co_da_rozwiazanie` sam typuje kandydatów — jednostki **odcięte od wszystkich
+celów** (klasa nie dojdzie, więc nigdy nie wezmą udziału w walce) oraz
+**bezczynne jednostki cywilne**, zostawiając zapas w rezerwie — i liczy:
+
+* ile tarcz wróci (procent zwrotu z efektu `Unit_Shield_Value_Pct` przy akcji
+  „Disband Unit Recover"),
+* ile zaoszczędzisz na utrzymaniu co turę, licząc **faktyczny rozkład jednostek
+  na miasta macierzyste**, a nie średnią,
+* ile uwolni się żywności,
+* **w którym mieście rozwiązać**, żeby tarcze trafiły tam, gdzie brakuje
+  budynku (tarcze wpadają do miasta, w którym rozwiązujesz),
+* co za ten zwrot kupisz.
 
 ### Audyt miast
 

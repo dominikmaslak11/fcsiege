@@ -409,6 +409,46 @@ def regions(tmap: TerrainMap, passable) -> dict[tuple[int, int], int]:
     return seen
 
 
+def _upkeep_profile(rs, gov: str) -> tuple[str, int, int]:
+    """(typ kosztu, darmowe na miasto, mnoznik) dla danego ustroju."""
+    all_govs = set(rs.governments)
+    out_type, free, factor = "Gold", 0, 0
+    for eff in rs.effects_by_type.get("Unit_Upkeep_Free_Per_City", []):
+        govs = [r.name for r in eff.reqs if r.type == "Gov" and r.present]
+        types = [r.name for r in eff.reqs if r.type == "OutputType"]
+        if gov in govs and types:
+            out_type, free = types[0], eff.value
+    for eff in rs.effects_by_type.get("Upkeep_Factor", []):
+        pos = [r.name for r in eff.reqs if r.type == "Gov" and r.present]
+        neg = [r.name for r in eff.reqs if r.type == "Gov" and not r.present]
+        types = [r.name for r in eff.reqs if r.type == "OutputType"]
+        if types and types[0] != out_type:
+            continue
+        if pos and gov not in pos:
+            continue
+        if neg and gov in neg:
+            continue
+        if not pos and not neg:
+            continue
+        if neg and not pos and not (all_govs - set(neg)):
+            continue
+        factor += eff.value
+    return out_type, free, max(1, factor)
+
+
+def _known_techs(save: "Save") -> set[str]:
+    research = save.reg.get("research")
+    sf = save.reg.get("savefile")
+    if not research or not sf:
+        return set()
+    tbl = research.table("r")
+    vector = sf.list("technology_vector")
+    if not tbl or not len(tbl):
+        return set()
+    done = str(list(tbl.dicts())[0].get("done") or "")
+    return {vector[i] for i, ch in enumerate(done) if ch == "1" and i < len(vector)}
+
+
 # ------------------------------------------------------------------ wywiad
 
 def _distance(a: tuple[int, int], b: tuple[int, int]) -> int:
@@ -541,6 +581,167 @@ class Intel:
                                            for u in here)
         out["garnizony"] = garrisons
         return out
+
+    # ------------------------------------------------------ rozwiazywanie
+
+    def disband_plan(self, rs, unit_types: list[str] | None = None,
+                     full: bool = False) -> dict:
+        """Co da rozwiazanie jednostek: tarcze, utrzymanie, zywnosc, gdzie.
+
+        Procent zwrotu czytamy z regul (efekt Unit_Shield_Value_Pct przy akcji
+        "Disband Unit Recover"), tak samo utrzymanie wg ustroju. Kandydatow
+        dobieramy sami: jednostki odciete od wszystkich celow oraz bezczynne
+        jednostki cywilne.
+        """
+        import collections
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+
+        # ile procent kosztu wraca
+        pct = 100
+        for eff in rs.effects_by_type.get("Unit_Shield_Value_Pct", []):
+            acts = [r.name for r in eff.reqs if r.type == "Action" and r.present]
+            if "Disband Unit Recover" in acts:
+                pct += eff.value
+        pct = max(0, pct)
+
+        gov = s.me.government
+        out_type, free_per_city, factor = _upkeep_profile(rs, gov)
+
+        units = s.units_of(s.me.slot)
+        sec = s._sections[s.me.slot]
+        ctbl = sec.table("c")
+        crows = list(ctbl.dicts()) if ctbl else []
+        city_by_id = {int(r["id"]): r for r in crows}
+        by_home = collections.Counter(u.homecity for u in units)
+
+        # cele: obszary, do ktorych warto docierac
+        tmap = TerrainMap(s)
+        enemy_spots = []
+        for p in s.players.values():
+            if p.slot == s.me.slot:
+                continue
+            cs = s.cities_of(p.slot) if full else [
+                c for c in s.known_cities() if c.owner == p.slot]
+            enemy_spots.extend((c.x, c.y) for c in cs)
+
+        candidates: list[dict] = []
+        chosen: list = []
+        wanted = {str(t) for t in (unit_types or [])}
+
+        # 1) jednostki odciete od wszystkich celow (klasa nie dojdzie)
+        by_class: dict[str, list] = collections.defaultdict(list)
+        for u in units:
+            ut = rs.units.get(u.type)
+            if ut:
+                by_class[rs.uclass_of(ut).name].append(u)
+        for cls, group in by_class.items():
+            ok = passability(rs, tmap, cls)
+            reg = regions(tmap, ok)
+            good = {reg.get(spot, 0) for spot in enemy_spots if reg.get(spot)}
+            cut = [u for u in group if reg.get((u.x, u.y), 0) not in good]
+            if not cut:
+                continue
+            for tname, n in collections.Counter(u.type for u in cut).items():
+                if wanted and tname not in wanted:
+                    continue
+                ut = rs.units[tname]
+                if ut.attack <= 0 and ut.defense <= 0:
+                    continue                      # cywilne omijamy tutaj
+                candidates.append({
+                    "jednostka": tname, "klasa": cls, "sztuk": n,
+                    "powod": "odcięta od wszystkich celów — nie dojdzie do walki",
+                    "koszt_budowy": ut.build_cost,
+                    "zwrot_tarcz": ut.build_cost * pct // 100 * n,
+                    "zywnosc": getattr(ut, "uk_food", 0) * n,
+                })
+                chosen.extend([u for u in cut if u.type == tname])
+
+        # 2) bezczynne jednostki cywilne
+        idle = [u for u in units
+                if u.activity == "Idle" and rs.units.get(u.type)
+                and rs.units[u.type].attack == 0 and rs.units[u.type].defense <= 1]
+        for tname, n in collections.Counter(u.type for u in idle).items():
+            if wanted and tname not in wanted:
+                continue
+            ut = rs.units[tname]
+            keep = 0 if wanted else min(n, 30)   # zapas na roboty
+            drop = n - keep
+            if drop <= 0:
+                continue
+            candidates.append({
+                "jednostka": tname, "klasa": rs.uclass_of(ut).name, "sztuk": drop,
+                "powod": f"bezczynne ({n} sztuk stoi, zostawiam {keep} w rezerwie)",
+                "koszt_budowy": ut.build_cost,
+                "zwrot_tarcz": ut.build_cost * pct // 100 * drop,
+                "zywnosc": getattr(ut, "uk_food", 0) * drop,
+            })
+            chosen.extend([u for u in idle if u.type == tname][:drop])
+
+        # oszczednosc na utrzymaniu: przed i po
+        def upkeep(counter) -> int:
+            return sum(max(0, counter.get(cid, 0) - free_per_city) * max(1, factor)
+                       for cid in city_by_id)
+        after = by_home.copy()
+        for u in chosen:
+            after[u.homecity] -= 1
+        before_cost, after_cost = upkeep(by_home), upkeep(after)
+
+        # gdzie rozwiazac: miasta bez kluczowych budynkow
+        KEY = ["Library", "Temple", "Marketplace", "Granary", "Harbour",
+               "Colosseum", "Aqueduct", "University", "Bank"]
+        spots = []
+        for r in crows:
+            blds = set(s._bits(r.get("improvements")))
+            missing = [k for k in KEY
+                       if k in rs.buildings and k not in blds
+                       and all(t in _known_techs(s) for t in rs.buildings[k].req_techs())]
+            if not missing:
+                continue
+            cheapest = min(missing, key=lambda k: rs.buildings[k].build_cost)
+            here = sum(1 for u in chosen
+                       if (u.x, u.y) == (int(r["x"]), int(r["y"])))
+            spots.append({
+                "miasto": str(r.get("name")), "rozmiar": int(r.get("size") or 0),
+                "brakuje": missing,
+                "najtanszy_brak": cheapest,
+                "koszt": rs.buildings[cheapest].build_cost,
+                "buduje_teraz": str(r.get("currently_building_name") or "") or None,
+                "jednostek_do_rozwiazania_na_miejscu": here,
+            })
+        spots.sort(key=lambda x: (-x["jednostek_do_rozwiazania_na_miejscu"],
+                                  -x["rozmiar"]))
+
+        total = sum(c["zwrot_tarcz"] for c in candidates)
+        buys = []
+        for k in KEY:
+            b = rs.buildings.get(k)
+            if b and b.build_cost and all(t in _known_techs(s) for t in b.req_techs()):
+                brakuje = sum(1 for x in spots if k in x["brakuje"])
+                if brakuje:
+                    buys.append({"budynek": k, "koszt": b.build_cost,
+                                 "brakuje_w_miastach": brakuje,
+                                 "ile_za_zwrot": total // b.build_cost})
+        buys.sort(key=lambda x: -x["brakuje_w_miastach"])
+
+        return {
+            "zwrot_procent": pct,
+            "ustroj": gov,
+            "utrzymanie_placone_w": {"Gold": "złocie", "Shield": "tarczach"}.get(
+                out_type, out_type),
+            "kandydaci": sorted(candidates, key=lambda c: -c["zwrot_tarcz"]),
+            "razem_tarcz": total,
+            "utrzymanie_teraz": before_cost,
+            "utrzymanie_po": after_cost,
+            "oszczednosc_na_ture": before_cost - after_cost,
+            "uwolniona_zywnosc": sum(c["zywnosc"] for c in candidates),
+            "gdzie_rozwiazac": spots[:12],
+            "co_za_to_kupisz": buys[:6],
+            "uwaga": ("Tarcze trafiają do miasta, w którym rozwiązujesz jednostkę, "
+                      "i idą w bieżącą produkcję — ustaw docelowy budynek ZANIM "
+                      "rozwiążesz."),
+        }
 
     # -------------------------------------------------------------- miasta
 
@@ -814,6 +1015,13 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_disband(self, args: dict) -> dict:
+        full = bool(args.get("pelny_wglad", self._intel_full))
+        types = args.get("jednostki") or None
+        return self._need_intel().disband_plan(
+            self._intel_ruleset(),
+            [str(t) for t in types] if types else None, full)
 
     def ai_cities(self, args: dict) -> dict:
         return self._need_intel().cities_audit(self._intel_ruleset())
