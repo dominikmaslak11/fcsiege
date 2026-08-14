@@ -369,6 +369,14 @@ def test_savegame():
               str(kat["nie_wchodzi_bez_drogi"]))
         check("liczy obszary przejezdne i sztuki w nich",
               bool(kat["moje_sztuki_wg_obszaru"]))
+        if kat.get("polaczenia_drogowe"):
+            link = kat["polaczenia_drogowe"][0]
+            check("planuje połączenie drogowe dla odciętych jednostek",
+                  link["kafli_do_zbudowania"] > 0
+                  and link["lacznie_tur_pracy"] >= link["kafli_do_zbudowania"],
+                  f"{link['kafli_do_zbudowania']} kafli / "
+                  f"{link['lacznie_tur_pracy']} tur pracy")
+
     piech = dispatch(bridge, "przejezdnosc", {"jednostki": ["Pikemen"]})
     pk = piech.get("jednostki", {}).get("Pikemen")
     if pk:

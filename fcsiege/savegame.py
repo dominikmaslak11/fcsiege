@@ -318,6 +318,72 @@ def passability(rs, tmap: TerrainMap, uclass: str):
     return ok
 
 
+def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
+              target_region: int, reg: dict, max_nodes: int = 200000) -> dict | None:
+    """Najtansze polaczenie drogowe z kieszeni do wskazanego obszaru.
+
+    Koszt kafla to liczba tur pracy potrzebnych, zeby zbudowac tam droge
+    (road_time z regul); kafle juz przejezdne kosztuja zero.
+    """
+    import heapq
+    road_time = {t.name: getattr(t, "road_time", 0) for t in rs.terrains.values()}
+    W, H = tmap.width, tmap.height
+
+    def cost(x: int, y: int):
+        t = tmap.terrain(x, y)
+        if t is None:
+            return None
+        terr = rs.terrains.get(t)
+        if terr is None or not terr.is_land:
+            return None
+        if passable(x, y):
+            return 0
+        return road_time.get(t) or 4
+
+    dist = {start: 0}
+    prev: dict = {}
+    pq = [(0, start)]
+    seen = 0
+    goal = None
+    while pq and seen < max_nodes:
+        d, (x, y) = heapq.heappop(pq)
+        seen += 1
+        if d > dist.get((x, y), 1 << 30):
+            continue
+        if reg.get((x, y)) == target_region:
+            goal = (x, y)
+            break
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx == dy == 0:
+                    continue
+                nx, ny = (x + dx) % W, y + dy
+                if not (0 <= ny < H):
+                    continue
+                c = cost(nx, ny)
+                if c is None:
+                    continue
+                nd = d + c
+                if nd < dist.get((nx, ny), 1 << 30):
+                    dist[(nx, ny)] = nd
+                    prev[(nx, ny)] = (x, y)
+                    heapq.heappush(pq, (nd, (nx, ny)))
+    if goal is None:
+        return None
+    path = [goal]
+    while path[-1] in prev:
+        path.append(prev[path[-1]])
+    path.reverse()
+    todo = [{"x": x, "y": y, "teren": tmap.terrain(x, y),
+             "tur_pracy": road_time.get(tmap.terrain(x, y)) or 4}
+            for x, y in path if not passable(x, y)]
+    total = sum(t["tur_pracy"] for t in todo)
+    return {"kafli_do_zbudowania": len(todo), "lacznie_tur_pracy": total,
+            "kafle": todo,
+            "robotnikow_na_jedna_ture": total,
+            "przy_8_robotnikach_tur": max(1, -(-total // 8)) if total else 0}
+
+
 def regions(tmap: TerrainMap, passable) -> dict[tuple[int, int], int]:
     """Spojne obszary przejezdne (8-kierunkowo, mapa zawinieta w poziomie)."""
     seen: dict[tuple[int, int], int] = {}
@@ -534,6 +600,26 @@ class Intel:
                     "moich_sztuk_w_tym_obszarze": where.get(z, 0),
                     "dojda": where.get(z, 0) > 0,
                 })
+            # dla odcietych grup policz, ile pracy kosztuje polaczenie ich drogą
+            target_regions = {c["obszar"] for c in entry["cele"] if c["obszar"]}
+            main = max(target_regions, key=lambda z: sum(
+                1 for c in entry["cele"] if c["obszar"] == z), default=0)
+            links = []
+            for z, n in where.items():
+                if z == main or z == 0 or n == 0:
+                    continue
+                spot = next(((u.x, u.y) for u in mine
+                             if reg.get((u.x, u.y), 0) == z), None)
+                if spot is None:
+                    continue
+                link = road_link(rs, tmap, ok, spot, main, reg)
+                if link:
+                    links.append({"obszar": z, "odcietych_sztuk": n, **link})
+            if links:
+                entry["polaczenia_drogowe"] = sorted(
+                    links, key=lambda l: l["lacznie_tur_pracy"])
+                entry["glowny_obszar"] = main
+
             entry["odcietych_sztuk"] = sum(
                 v for k, v in where.items()
                 if not any(c["obszar"] == k for c in entry["cele"]))

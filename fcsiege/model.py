@@ -139,6 +139,7 @@ class Terrain:
     tclass: str = "Land"
     flags: set[str] = field(default_factory=set)
     native_to: set[str] = field(default_factory=set)
+    road_time: int = 0
 
     @property
     def is_land(self) -> bool:
@@ -326,6 +327,7 @@ class Ruleset:
                 tclass=clean_name(sec.str("class", "Land")),
                 flags=set(str(f) for f in sec.list("flags")),
                 native_to=set(clean_name(str(c)) for c in sec.list("native_to")),
+                road_time=sec.int("road_time"),
             )
             self.terrains[t.name] = t
 
