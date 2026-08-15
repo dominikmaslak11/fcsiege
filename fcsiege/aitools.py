@@ -405,6 +405,31 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "plan_kampanii",
+        "description": (
+            "Konkretne rozkazy na tę turę przy wojnie, także na kilku frontach. "
+            "Łączy trzy rzeczy, które osobno nie wystarczają: ile kosztuje "
+            "zdobycie celu (silnik walki na jego prawdziwym terenie i murach), "
+            "ile ten cel jest wart (budynki, port, drogi, dystans do stolicy) "
+            "i czy w ogóle zdążysz (koszt ruchu po heksie). Potem przydziela "
+            "Twoje jednostki do celów — najpierw tam, gdzie stosunek wartości "
+            "do kosztu jest najlepszy — i mówi, ile wysłać, skąd i w ile tur. "
+            "Do każdej grupy dolicza garnizon, bo pusta zdobycz jest tania do "
+            "odkupienia przez wroga."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tury": {"type": "integer",
+                         "description": "ile tur marszu uznać za zasięg (domyślnie 2)"},
+                "rezerwa": {"type": "integer",
+                            "description": "ile jednostek zostawić w zdobytym "
+                                           "mieście (domyślnie 1)"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "gotowosc_wojenna",
         "description": (
             "Odpowiada na pytanie „uderzać teraz czy czekać” liczbami, nie "
@@ -641,6 +666,7 @@ TOOL_METHOD = {
     "korupcja": "ai_corruption",
     "plan_budowy": "ai_build_plan",
     "gotowosc_wojenna": "ai_war_readiness",
+    "plan_kampanii": "ai_campaign",
     "mobilnosc": "ai_mobility",
     "obrona_miasta": "ai_city_defense",
     "alerty": "ai_alerts",
@@ -746,6 +772,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_build_plan(dict(args))
     if name == "gotowosc_wojenna":
         return bridge.ai_war_readiness(dict(args))
+    if name == "plan_kampanii":
+        return bridge.ai_campaign(dict(args))
     if name == "mobilnosc":
         return bridge.ai_mobility(dict(args))
     if name == "obrona_miasta":

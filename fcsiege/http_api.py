@@ -357,6 +357,7 @@ class Handler(BaseHTTPRequestHandler):
         ("potencjal_wzrostu", {}),
         ("korupcja", {}),
         ("mobilnosc", {"tury": 2}),
+        ("plan_kampanii", {"tury": 2}),
     )
 
     def _analysis(self) -> None:

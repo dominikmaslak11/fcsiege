@@ -365,6 +365,14 @@ KEYS: dict[str, str] = {
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
+    "rozkazy": "orders", "odlozone": "postponed", "cel": "target",
+    "wyslij_jednostek": "send_units", "w_tym_do_walki": "of_which_to_fight",
+    "w_tym_garnizon": "of_which_garrison", "skad": "from",
+    "dotra_w_turach": "arrive_in_turns", "oplacalnosc": "value_per_unit",
+    "potrzeba_atakow_90proc": "attacks_needed_90pct", "z_rezerwa": "with_reserve",
+    "moich_zaczepnych": "my_offensive_units", "zaangazowanych": "committed",
+    "w_rezerwie": "in_reserve", "fronty": "fronts", "wartosc": "value",
+    "tura_zasiegu": "reach_turns",
     "uklady": "treaties", "tur_do_zmiany": "turns_to_change",
     "co_sie_stanie": "what_will_happen", "ryzyko": "risk",
     "najblizszy_kiedykolwiek": "closest_ever", "ambasada": "embassy",
@@ -548,6 +556,7 @@ TOOL_NAMES: dict[str, str] = {
     "epoki": "eras",
     "plan_budowy": "build_plan",
     "gotowosc_wojenna": "war_readiness",
+    "plan_kampanii": "campaign_plan",
     "mobilnosc": "mobility",
     "alerty": "alerts",
     "uklady_dyplomatyczne": "treaties",
@@ -666,6 +675,16 @@ TOOL_DESC: dict[str, str] = {
         "of troops standing in the field. Call it for questions about "
         "regrouping, an overstretched front, \"will I make it\", \"where do "
         "I gather\", \"should I uncover this border\".",
+    "plan_kampanii":
+        "Concrete orders for this turn in a war, including a war on several "
+        "fronts. It joins three things that are insufficient separately: what "
+        "taking a target costs (the combat engine on its real terrain and "
+        "walls), what the target is worth (buildings, harbour, roads, distance "
+        "to your capital) and whether you can even get there (hex movement "
+        "cost). It then allocates your units to targets — best value-per-unit "
+        "first — and says how many to send, from where and in how many turns. "
+        "Each group includes a garrison, because an empty prize is cheap for "
+        "the enemy to buy back.",
     "gotowosc_wojenna":
         "Answers \"strike now or wait\" with numbers rather than opinion. For "
         "the given nations it collects the state of every one of their cities "

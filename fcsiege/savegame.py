@@ -1801,6 +1801,196 @@ class Intel:
                 "od pełnego zapasu"),
         }
 
+
+    # -------------------------------------------------------- plan kampanii
+
+    def campaign_plan(self, rs, tury: int = 2, rezerwa: int = 1) -> dict:
+        """Rozkazy na te ture przy wojnie na kilka frontow.
+
+        Laczy trzy rzeczy, ktore osobno nie wystarczaja: ile kosztuje zdobycie
+        celu (silnik walki), ile jest wart (budynki, port, drogi, polaczenie
+        z wlasna siecia) i czy w ogole zdazymy (koszt ruchu po heksie).
+        Potem przydziela wojsko zachlannie - najpierw tam, gdzie stosunek
+        wartosci do kosztu jest najlepszy, a cel jest osiagalny w tej turze.
+
+        `rezerwa` to ile jednostek zostawiamy w kazdym zdobywanym miescie:
+        garnizon podwaja koszt jego odkupienia i wlacza stan wojenny.
+        """
+        from .combat import Side, Situation, siege
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        ct = city_tiles(s)
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+
+        wrogowie = {slot for slot, st in
+                    ((sl, s.me.diplomacy.get(sl)) for sl in s.players)
+                    if st == "War" and slot != s.me.slot}
+        if not wrogowie:
+            return {"uwaga": "nie jesteś z nikim w stanie wojny",
+                    "rozkazy": []}
+
+        # --- moje jednostki zaczepne, pogrupowane
+        moje = []
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and ut.attack > 0 and "NonMil" not in ut.flags:
+                moje.append((u, ut))
+        if not moje:
+            return {"blad": "nie mam jednostek zaczepnych"}
+
+        najlepszy = max((ut for _u, ut in moje), key=lambda t: t.attack)
+        rows = list(s._sections[s.me.slot].table("c").dicts())
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+        wonders = {b for b in mine_blds
+                   if rs.buildings.get(b) and rs.buildings[b].is_wonder}
+
+        # --- cele
+        cele = []
+        for slot in wrogowie:
+            sec = s._sections.get(slot)
+            tbl = sec.table("c") if sec else None
+            garnizon = collections.defaultdict(list)
+            for u in s.units_of(slot):
+                ut = rs.units.get(u.type)
+                if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                    garnizon[(u.x, u.y)].append(ut)
+            for r in (tbl.dicts() if tbl else []):
+                x, y = int(r.get("x") or 0), int(r.get("y") or 0)
+                blds = set(s._bits(r.get("improvements")))
+                rozmiar = int(r.get("size") or 0)
+                obroncy = garnizon.get((x, y), [])
+
+                terr = rs.terrains.get(tmap.terrain(x, y))
+                if terr is None:
+                    continue
+                extras = {e for e in rs.extras if tmap.has_extra(e, x, y)}
+                sit = Situation(
+                    terrain=terr, extras=extras, in_city=True,
+                    city_size=rozmiar,
+                    buildings={b for b in blds
+                               if rs.buildings.get(b)
+                               and not rs.buildings[b].is_wonder},
+                    player_buildings=set(), fortified=True,
+                    gov="Despotism", techs=techs,
+                    units_on_tile=max(1, len(obroncy)))
+
+                if obroncy:
+                    strony = [Side(utype=d, count=1, vet=0) for d in obroncy]
+                    wynik = siege(rs, Side(utype=najlepszy, count=1, vet=2),
+                                  strony, sit, trials=4000)
+                    trzeba = wynik.attacks_for(0.90) or len(obroncy) * 3
+                    straty = round(wynik.mean_losses, 2)
+                else:
+                    trzeba, straty = 1, 0.0
+
+                # kto zdazy i skad
+                w_zasiegu = []
+                for u, ut in moje:
+                    if self.geom.real_distance((x, y), (u.x, u.y)) > \
+                            max(1, ut.move_rate) * (tury + 1) + 2:
+                        continue
+                    t_marsz = march_turns(rs, tmap, self.geom, ut, (u.x, u.y),
+                                          (x, y), max_nodes=6000, cities=ct)
+                    if t_marsz is not None and t_marsz < tury:
+                        w_zasiegu.append((t_marsz, u, ut))
+                w_zasiegu.sort(key=lambda z: (z[0], -z[2].attack))
+
+                wart = self._wartosc_celu(rs, tmap, x, y, blds, rozmiar, rows)
+                potrzeba = trzeba + rezerwa
+                cele.append({
+                    "nacja": s.players[slot].nation,
+                    "miasto": str(r.get("name") or "?"),
+                    "x": x, "y": y, "rozmiar": rozmiar,
+                    "teren": terr.name,
+                    "mury": "City Walls" in blds,
+                    "obroncy": [d.name for d in obroncy],
+                    "potrzeba_atakow_90proc": trzeba,
+                    "z_rezerwa": potrzeba,
+                    "srednie_straty": straty,
+                    "wartosc": wart,
+                    "_kandydaci": w_zasiegu,
+                    "moich_w_zasiegu": len(w_zasiegu),
+                    "najszybciej_tur": w_zasiegu[0][0] if w_zasiegu else None,
+                })
+
+        # --- przydzial: najpierw najlepszy stosunek wartosci do kosztu
+        for c in cele:
+            koszt = max(1, c["z_rezerwa"])
+            c["oplacalnosc"] = round(c["wartosc"] / koszt, 2)
+        cele.sort(key=lambda c: (c["najszybciej_tur"] is None,
+                                 -c["oplacalnosc"]))
+
+        zajete: set[int] = set()
+        rozkazy, odlozone = [], []
+        for c in cele:
+            wolni = [(t, u, ut) for t, u, ut in c["_kandydaci"]
+                     if id(u) not in zajete]
+            if len(wolni) < c["z_rezerwa"]:
+                odlozone.append({
+                    "miasto": c["miasto"], "nacja": c["nacja"],
+                    "powod": (f"w zasięgu {len(wolni)} jednostek, "
+                              f"potrzeba {c['z_rezerwa']}"),
+                    "wartosc": c["wartosc"],
+                })
+                continue
+            wybrani = wolni[:c["z_rezerwa"]]
+            for _t, u, _ut in wybrani:
+                zajete.add(id(u))
+            skad = collections.Counter(f"({u.x},{u.y})" for _t, u, _ut in wybrani)
+            rozkazy.append({
+                "cel": f"{c['nacja']} / {c['miasto']}",
+                "x": c["x"], "y": c["y"],
+                "teren": c["teren"], "mury": c["mury"],
+                "obroncy": c["obroncy"] or ["brak — samo wejście"],
+                "wyslij_jednostek": c["z_rezerwa"],
+                "w_tym_do_walki": c["potrzeba_atakow_90proc"],
+                "w_tym_garnizon": rezerwa,
+                "skad": dict(skad.most_common(6)),
+                "dotra_w_turach": max(t for t, _u, _ut in wybrani) + 1,
+                "srednie_straty": c["srednie_straty"],
+                "wartosc_zdobyczy": c["wartosc"],
+                "oplacalnosc": c["oplacalnosc"],
+            })
+
+        wolnych = sum(1 for u, _ut in moje if id(u) not in zajete)
+        for c in cele:
+            c.pop("_kandydaci", None)
+        return {
+            "tura_zasiegu": tury,
+            "fronty": sorted({c["nacja"] for c in cele}),
+            "moich_zaczepnych": len(moje),
+            "zaangazowanych": len(zajete),
+            "w_rezerwie": wolnych,
+            "rozkazy": rozkazy,
+            "odlozone": odlozone,
+            "zasada": (
+                "kolejność wg wartości zdobyczy na jednostkę wysłaną; do każdej "
+                "grupy doliczona rezerwa na garnizon, bo pusta zdobycz jest "
+                "tania do odkupienia"),
+        }
+
+    def _wartosc_celu(self, rs, tmap, x, y, blds, rozmiar, moje_rows) -> int:
+        """Ile państwo realnie zyska na zdobyciu tego miasta."""
+        drogi = sum(1 for nb in self.geom.neighbours(x, y)
+                    if tmap.has_road(*nb))
+        nadmorskie = any(
+            (t := rs.terrains.get(tmap.terrain(*nb))) is not None and not t.is_land
+            for nb in self.geom.neighbours(x, y) if tmap.terrain(*nb))
+        budynki = [b for b in blds
+                   if rs.buildings.get(b) and not rs.buildings[b].is_wonder]
+        stolica = next(((int(r["x"]), int(r["y"])) for r in moje_rows
+                        if "Palace" in set(self.save._bits(r.get("improvements")))),
+                       None)
+        dyst = self.geom.real_distance((x, y), stolica) if stolica else 20
+        return (rozmiar * 2 + len(budynki) * 3 + drogi
+                + (4 if nadmorskie else 0) - dyst // 5)
+
     # ------------------------------------------------------- gotowosc wojenna
 
     def war_readiness(self, rs, nations: list[str], tury: int = 2) -> dict:
@@ -3242,6 +3432,11 @@ class IntelMixin:
         return self._need_intel().mobility(
             self._intel_ruleset(), int(args.get("tury") or 2),
             str(args.get("jednostka", "")))
+
+    def ai_campaign(self, args: dict) -> dict:
+        return self._need_intel().campaign_plan(
+            self._intel_ruleset(), int(args.get("tury") or 2),
+            int(args.get("rezerwa") if args.get("rezerwa") is not None else 1))
 
     def ai_war_readiness(self, args: dict) -> dict:
         nations = args.get("nacje") or args.get("nations") or []

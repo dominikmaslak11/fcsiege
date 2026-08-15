@@ -583,6 +583,26 @@ dróg**, dystans do stolicy i otoczenie. Miasto bez dróg i portu jest
 obciążeniem, nie nabytkiem — kosztuje utrzymanie, garnizon i szczęście, a nie
 daje produkcji.
 
+### Plan kampanii
+
+`plan_kampanii` odpowiada na pytanie „jakie wydać rozkazy w tej turze", także
+przy wojnie na kilku frontach. Łączy trzy rzeczy, które osobno nie wystarczają:
+
+| składnik | skąd |
+|---|---|
+| **ile kosztuje** zdobycie celu | silnik walki na jego prawdziwym terenie, murach i garnizonie |
+| **ile jest wart** | budynki, port, drogi wokół, dystans do stolicy |
+| **czy zdążysz** | koszt ruchu po heksie, `march_turns` |
+
+Potem przydziela jednostki zachłannie — najpierw tam, gdzie stosunek wartości
+do liczby wysłanych jednostek jest najlepszy — i zwraca gotowy rozkaz: ile
+wysłać, skąd, w ile tur, jakie straty. Do każdej grupy dolicza **garnizon**,
+bo pusta zdobycz jest tania do odkupienia przez wroga (`Incite_Cost_Pct +100`
+za samą obecność jednostki).
+
+Cele, na które nie starcza wojska w zasięgu, trafiają na listę odłożonych
+z podaniem, ilu jednostek zabrakło — zamiast po cichu zniknąć.
+
 ### Mobilność i logistyka
 
 `mobilnosc` jest odwrotnością `gotowosc_wojenna`: tamto mówi, ile tur dzieli
