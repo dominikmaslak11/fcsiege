@@ -146,9 +146,12 @@ def test_http() -> None:
             check("nieznane narzędzie daje 404", False)
         except urllib.error.HTTPError as exc:
             body = json.loads(exc.read())
+            # klucz "dostepne" też podlega tłumaczeniu — sprawdzamy oba
+            lista = body.get("available", body.get("dostepne", []))
             check("nieznane narzędzie daje 404 z listą po angielsku",
-                  exc.code == 404 and "compute" in body.get("dostepne", []),
-                  body.get("error"))
+                  exc.code == 404 and "compute" in lista, body.get("error"))
+            check("klucz listy też przetłumaczony", "available" in body,
+                  sorted(body))
         try:
             get("/nie-ma-takiej?lang=en")
             check("nieznana ścieżka daje 404", False)
