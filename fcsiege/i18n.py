@@ -365,6 +365,13 @@ KEYS: dict[str, str] = {
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
+    "punkty_zborne": "rally_points", "cele_wroga_w_zasiegu": "enemy_targets_in_reach",
+    "moich_w_zasiegu": "mine_in_reach", "najszybciej_tur": "fastest_turns",
+    "wg_typu": "by_type", "grupy": "groups", "sredni_zasieg_kafli": "average_reach_tiles",
+    "rozciagniecie": "overstretch", "w_polu": "in_the_field", "w_miastach": "in_cities",
+    "limit_bez_kosztu_na_miasto": "free_limit_per_city",
+    "jednostek_w_polu": "units_in_the_field", "niezadowolonych": "unhappy",
+    "odciete": "cut_off", "jednostek_bojowych": "combat_units",
     "cel_wojny": "war_target", "tury_zasiegu": "reach_turns",
     "moje_jednostki_bojowe": "my_combat_units", "cele": "targets",
     "podsumowanie_celow": "target_summary", "miast_lacznie": "cities_total",
@@ -494,6 +501,7 @@ TOOL_NAMES: dict[str, str] = {
     "epoki": "eras",
     "plan_budowy": "build_plan",
     "gotowosc_wojenna": "war_readiness",
+    "mobilnosc": "mobility",
     "korupcja": "waste",
     "moje_technologie": "my_technologies",
     "szlaki_handlowe": "trade_routes",
@@ -559,6 +567,16 @@ TOOL_DESC: dict[str, str] = {
         "The list of eras in the current ruleset with the tech-tree step that "
         "opens each one and what becomes available at that step: units, "
         "buildings and wonders.",
+    "mobilnosc":
+        "Logistics and reach. The inverse of 'war_readiness': that tool says "
+        "how many turns to a named city, this one says WHERE a unit can get at "
+        "all. It uses real hex movement cost — hills and forest halve the "
+        "reach, mountains cut it to a third, roads multiply it. Returns rally "
+        "points (which of your cities can gather the most units, and how "
+        "fast), enemy targets in reach, cut-off units, and the happiness cost "
+        "of troops standing in the field. Call it for questions about "
+        "regrouping, an overstretched front, \"will I make it\", \"where do "
+        "I gather\", \"should I uncover this border\".",
     "gotowosc_wojenna":
         "Answers \"strike now or wait\" with numbers rather than opinion. For "
         "the given nations it collects the state of every one of their cities "

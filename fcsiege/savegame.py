@@ -399,38 +399,28 @@ def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
 
 
 
-def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
-                start: tuple[int, int], goal: tuple[int, int],
-                max_nodes: int = 60000, blocked=None) -> int | None:
-    """Ile tur marszu z A do B - po koszcie ruchu, nie po odleglosci.
+def _enter_cost_fn(rs, tmap: TerrainMap, ut, full: int, blocked=None,
+                   goal=None):
+    """Zwraca funkcje (skad, dokad) -> koszt w ulamkach ruchu albo None.
 
-    Freeciv liczy ruch w ulamkach (SINGLE_MOVE = move_fragments). Wejscie na
-    kafel kosztuje `movement_cost` pelnych ruchow, chyba ze oba kafle lacz
-    drogi - wtedy placi sie `move_cost` drogi w ulamkach. Koszt jest ograniczony
-    do pelnego zapasu jednostki, a jednostka z choc jednym ulamkiem zawsze moze
-    wykonac jeden ruch (i konczy ture z zerem).
-
-    Zwraca liczbe tur albo None, gdy cel jest nieosiagalny dla tej klasy.
+    Wejscie kosztuje `movement_cost` pelnych ruchow, chyba ze oba kafle laczy
+    ulepszenie liniowe - wtedy placi sie jego `move_cost` w ulamkach. Koszt jest
+    ograniczony do pelnego zapasu jednostki.
     """
-    import heapq
-
     single = max(1, rs.move_fragments)
-    full = max(1, ut.move_rate) * single
     uclass = rs.uclass_of(ut)
     road_cost = _road_move_costs(rs)
 
-    def enter_cost(frm: tuple[int, int], to: tuple[int, int]) -> int | None:
+    def cost(frm: tuple[int, int], to: tuple[int, int]) -> int | None:
         name = tmap.terrain(*to)
         terr = rs.terrains.get(name) if name else None
         if terr is None:
             return None
-        native = uclass.name in terr.native_to
-        # ulepszenie liniowe laczace oba kafle zastepuje koszt terenu
         best = None
-        for extra, cost in road_cost.items():
+        for extra, c in road_cost.items():
             if tmap.has_extra(extra, *frm) and tmap.has_extra(extra, *to):
-                best = cost if best is None else min(best, cost)
-        if best is None and not native:
+                best = c if best is None else min(best, c)
+        if best is None and uclass.name not in terr.native_to:
             return None                    # klasa tu nie wejdzie
         if blocked is not None and to != goal and blocked(*to):
             return None                    # np. cudze terytorium przy pokoju
@@ -438,9 +428,37 @@ def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
             best = max(1, terr.movement_cost) * single
         return min(best, full)
 
-    # stan: (tury, zuzyte_w_tej_turze) - minimalizujemy leksykograficznie
-    start_state = (0, 0)
-    best: dict[tuple[int, int], tuple[int, int]] = {start: start_state}
+    return cost
+
+
+def _step(turns: int, used: int, full: int, cost: int) -> tuple[int, int]:
+    """Nowy stan (tury, zuzyte) po wejsciu na kafel o danym koszcie.
+
+    Jednostka z choc jednym ulamkiem zawsze wykona jeszcze jeden ruch i konczy
+    ture z zerem - stad srodkowa galaz.
+    """
+    left = full - used
+    if left >= cost:
+        return turns, used + cost
+    if left > 0:
+        return turns, full
+    return turns + 1, min(cost, full)
+
+
+def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
+                start: tuple[int, int], goal: tuple[int, int],
+                max_nodes: int = 60000, blocked=None) -> int | None:
+    """Ile tur marszu z A do B - po koszcie ruchu, nie po odleglosci.
+
+    Zwraca liczbe pelnych tur do przebycia (0 = dojdzie jeszcze w tej turze)
+    albo None, gdy cel jest nieosiagalny dla tej klasy.
+    """
+    import heapq
+
+    full = max(1, ut.move_rate) * max(1, rs.move_fragments)
+    cost_of = _enter_cost_fn(rs, tmap, ut, full, blocked, goal)
+
+    best: dict[tuple[int, int], tuple[int, int]] = {start: (0, 0)}
     pq = [(0, 0, start)]
     seen = 0
     while pq and seen < max_nodes:
@@ -450,21 +468,50 @@ def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
             return turns
         if (turns, used) > best.get(node, (1 << 30, 0)):
             continue
-        left = full - used
         for nb in geom.neighbours(*node):
-            cost = enter_cost(node, nb)
-            if cost is None:
+            c = cost_of(node, nb)
+            if c is None:
                 continue
-            if left >= cost:
-                nt, nu = turns, used + cost
-            elif left > 0:
-                nt, nu = turns, full        # ostatni ruch za resztke
-            else:
-                nt, nu = turns + 1, min(cost, full)
-            if (nt, nu) < best.get(nb, (1 << 30, 0)):
-                best[nb] = (nt, nu)
-                heapq.heappush(pq, (nt, nu, nb))
+            nxt = _step(turns, used, full, c)
+            if nxt < best.get(nb, (1 << 30, 0)):
+                best[nb] = nxt
+                heapq.heappush(pq, (nxt[0], nxt[1], nb))
     return None
+
+
+def reach_within(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
+                 start: tuple[int, int], max_turns: int = 2,
+                 blocked=None) -> dict[tuple[int, int], int]:
+    """Wszystkie kafle osiagalne w zadanej liczbie tur, z liczba tur.
+
+    Odwrotna perspektywa do `march_turns`: nie "ile tur do celu", tylko
+    "dokad ta jednostka zdazy". Przy malym `max_turns` czolo przeszukiwania
+    jest niewielkie, wiec liczy sie to szybko nawet dla wielu jednostek.
+    """
+    import heapq
+
+    full = max(1, ut.move_rate) * max(1, rs.move_fragments)
+    cost_of = _enter_cost_fn(rs, tmap, ut, full, blocked)
+
+    best: dict[tuple[int, int], tuple[int, int]] = {start: (0, 0)}
+    pq = [(0, 0, start)]
+    while pq:
+        turns, used, node = heapq.heappop(pq)
+        if (turns, used) > best.get(node, (1 << 30, 0)):
+            continue
+        if turns >= max_turns:
+            continue
+        for nb in geom.neighbours(*node):
+            c = cost_of(node, nb)
+            if c is None:
+                continue
+            nxt = _step(turns, used, full, c)
+            if nxt[0] > max_turns:
+                continue
+            if nxt < best.get(nb, (1 << 30, 0)):
+                best[nb] = nxt
+                heapq.heappush(pq, (nxt[0], nxt[1], nb))
+    return {tile: t for tile, (t, _u) in best.items()}
 
 
 def _road_move_costs(rs) -> dict[str, int]:
@@ -792,6 +839,139 @@ class Intel:
         return out
 
 
+
+
+    # ------------------------------------------------------------- mobilnosc
+
+    def mobility(self, rs, tury: int = 2, jednostka: str = "") -> dict:
+        """Logistyka: dokad kazda jednostka zdazy i gdzie sie przegrupowac.
+
+        Odwrotna perspektywa do `gotowosc_wojenna`: tam pytamy "ile tur do tego
+        miasta", tu "dokad ta jednostka w ogole zdazy". Zasieg liczymy realnym
+        kosztem ruchu po heksie, a nie odlegloscia, wiec wzgorza i las skracaja
+        go dwukrotnie, gory trzykrotnie, a drogi wydluzaja wielokrotnie.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tury = max(1, min(4, int(tury)))
+        tmap = TerrainMap(s)
+
+        # --- moje jednostki bojowe
+        units = []
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if not (ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags):
+                continue
+            if jednostka and u.type.lower() != jednostka.lower():
+                continue
+            units.append((u, ut))
+        if not units:
+            return {"blad": f"nie mam jednostek bojowych{' typu ' + jednostka if jednostka else ''}"}
+
+        # --- moje i cudze miasta
+        moje, obce = {}, {}
+        for slot, sec in s._sections.items():
+            tbl = sec.table("c") if sec else None
+            if tbl is None:
+                continue
+            nation = s.players[slot].nation if slot in s.players else "?"
+            wojska = collections.Counter()
+            if slot != s.me.slot:
+                for u in s.units_of(slot):
+                    ut = rs.units.get(u.type)
+                    if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                        wojska[(u.x, u.y)] += 1
+            for r in tbl.dicts():
+                key = (int(r.get("x") or 0), int(r.get("y") or 0))
+                entry = {"miasto": str(r.get("name") or "?"),
+                         "x": key[0], "y": key[1],
+                         "rozmiar": int(r.get("size") or 0)}
+                if slot == s.me.slot:
+                    moje[key] = entry
+                else:
+                    obce[key] = {**entry, "nacja": nation,
+                                 "obroncow": wojska.get(key, 0)}
+
+        # --- zasieg kazdej jednostki
+        na_miasto = collections.defaultdict(dict)      # kafel -> {indeks: tury}
+        zasiegi = []
+        for idx, (u, ut) in enumerate(units):
+            reach = reach_within(rs, tmap, self.geom, ut, (u.x, u.y), tury)
+            zasiegi.append(len(reach))
+            for tile, t in reach.items():
+                if tile in moje or tile in obce:
+                    prev = na_miasto[tile].get(idx)
+                    na_miasto[tile][idx] = t if prev is None else min(prev, t)
+
+        def zbierz(pool: dict) -> list[dict]:
+            out = []
+            for tile, info in pool.items():
+                kto = na_miasto.get(tile, {})
+                if not kto:
+                    continue
+                wg = collections.Counter(units[i][0].type for i in kto)
+                out.append({**info, "moich_w_zasiegu": len(kto),
+                            "najszybciej_tur": min(kto.values()),
+                            "wg_typu": dict(wg.most_common())})
+            out.sort(key=lambda c: (-c["moich_w_zasiegu"], c["najszybciej_tur"]))
+            return out
+
+        punkty = zbierz(moje)
+        cele = zbierz(obce)
+
+        # --- rozciagniecie: co stoi w polu i ile to kosztuje
+        w_miastach = {k for k in moje}
+        w_polu = [(u, ut) for u, ut in units if (u.x, u.y) not in w_miastach]
+        odciete = []
+        for idx, (u, ut) in enumerate(units):
+            if not any(tile in moje for tile in na_miasto
+                       if idx in na_miasto[tile]):
+                odciete.append({"jednostka": u.type, "x": u.x, "y": u.y,
+                                "powod": f"nie wróci do żadnego miasta w {tury} turach"})
+
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        mine_blds: set[str] = set()
+        rows = list(s._sections[s.me.slot].table("c").dicts())
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+        uf = max(1, self._city_effect(rs, "Unhappy_Factor", "", set(), gov,
+                                      techs, mine_blds, 0))
+        mcm = self._city_effect(rs, "Make_Content_Mil", "", set(), gov, techs,
+                                mine_blds, 0)
+        nazwy = {int(r.get("id") or 0): str(r.get("name") or "?") for r in rows}
+        pole_wg_domu = collections.Counter()
+        for u, ut in w_polu:
+            if getattr(ut, "uk_happy", 0) > 0:
+                pole_wg_domu[nazwy.get(u.homecity, "(bez miasta)")] += 1
+
+        grupy = collections.Counter((u.type, u.veteran) for u, _ in units)
+        return {
+            "tury": tury,
+            "jednostek_bojowych": len(units),
+            "grupy": [{"jednostka": t, "stopien": v, "sztuk": n,
+                       "ruch": rs.units[t].move_rate,
+                       "klasa": rs.units[t].uclass_id}
+                      for (t, v), n in grupy.most_common()],
+            "sredni_zasieg_kafli": round(sum(zasiegi) / len(zasiegi), 1),
+            "punkty_zborne": punkty[:12],
+            "cele_wroga_w_zasiegu": cele[:12],
+            "rozciagniecie": {
+                "w_polu": len(w_polu),
+                "w_miastach": len(units) - len(w_polu),
+                "limit_bez_kosztu_na_miasto": mcm // uf,
+                "wg_miasta_macierzystego": [
+                    {"miasto_macierzyste": m, "jednostek_w_polu": n,
+                     "niezadowolonych": max(0, n * uf - mcm)}
+                    for m, n in pole_wg_domu.most_common()],
+                "odciete": odciete[:12],
+            },
+            "czego_nie_liczymy": (
+                "stref kontroli, jednostek wroga na trasie i zapasu ruchu, "
+                "który jednostka już wydała w tej turze — zasięg liczony "
+                "od pełnego zapasu"),
+        }
 
     # ------------------------------------------------------- gotowosc wojenna
 
@@ -2070,6 +2250,11 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_mobility(self, args: dict) -> dict:
+        return self._need_intel().mobility(
+            self._intel_ruleset(), int(args.get("tury") or 2),
+            str(args.get("jednostka", "")))
 
     def ai_war_readiness(self, args: dict) -> dict:
         nations = args.get("nacje") or args.get("nations") or []

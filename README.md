@@ -439,6 +439,29 @@ przejezdne dla danej klasy i mówi, ile twoich jednostek stoi w którym obszarze
 oraz do których miast wroga faktycznie dotrą. Najsilniejsza jednostka jest
 bezużyteczna, jeśli utknie po drugiej stronie bagna.
 
+### Mobilność i logistyka
+
+`mobilnosc` jest odwrotnością `gotowosc_wojenna`: tamto mówi, ile tur dzieli
+jednostkę od wskazanego miasta, to mówi, **dokąd jednostka w ogóle zdąży**.
+
+Zasięg liczy `reach_within()` — jedno przeszukiwanie Dijkstry od pozycji
+jednostki, ograniczone liczbą tur, po tym samym koszcie ruchu co `march_turns`.
+Wynik zgadza się z nim kafel w kafel, a przy małym horyzoncie czoło jest
+niewielkie, więc 107 jednostek liczy się poniżej sekundy.
+
+Narzędzie zwraca:
+
+* **punkty zborne** — które własne miasto zbierze najwięcej jednostek i jak
+  szybko, z rozbiciem na typy,
+* **cele wroga w zasięgu** — z liczbą obrońców i liczbą własnych jednostek,
+  które tam dotrą,
+* **odcięte jednostki** — takie, które nie wrócą do żadnego miasta,
+* **koszt szczęścia wojsk w polu** — bo jednostka poza miastem robi
+  niezadowolonych w mieście macierzystym.
+
+Czego nie liczy: stref kontroli, jednostek wroga na trasie ani zapasu ruchu
+już wydanego w tej turze — zasięg jest liczony od pełnego zapasu.
+
 ### Porównanie ustrojów
 
 `porownaj_ustroje` czyta efekty ustrojów wprost z reguł (maksymalne suwaki,
@@ -555,7 +578,7 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/mcp_server.py` | serwer MCP (stdio) |
 | `fcsiege/http_api.py` | API HTTP + schemat OpenAPI |
 | `fcsiege/control.py` | gniazdo sterujące uruchomionym oknem |
-| `fcsiege/savegame.py` | czytanie zapisów gry, geometria mapy, korupcja, plan budowy |
+| `fcsiege/savegame.py` | czytanie zapisów gry, geometria mapy, marsz, korupcja, plan budowy |
 | `fcsiege/i18n.py` | katalogi polski↔angielski dla okna, narzędzi i odpowiedzi |
 | `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
 | `fcsiege/chat.py` | pętla rozmowy z Claude jako generator zdarzeń — bez Qt |

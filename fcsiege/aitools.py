@@ -300,6 +300,30 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "mobilnosc",
+        "description": (
+            "Logistyka i zasięg. Odwrotna perspektywa do 'gotowosc_wojenna': "
+            "tamto mówi, ile tur do wskazanego miasta, to mówi, DOKĄD każda "
+            "jednostka w ogóle zdąży. Liczy realny koszt ruchu po heksie — "
+            "wzgórza i las skracają zasięg dwukrotnie, góry trzykrotnie, drogi "
+            "wydłużają wielokrotnie. Zwraca punkty zborne (które własne miasto "
+            "zbierze najwięcej jednostek i jak szybko), cele wroga w zasięgu, "
+            "jednostki odcięte oraz koszt szczęścia wojsk stojących w polu. "
+            "Wywołaj przy pytaniach o przegrupowanie, rozciągnięcie frontu, "
+            "„czy zdążę”, „gdzie się zebrać”, „czy odsłonić granicę”."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tury": {"type": "integer",
+                         "description": "ile tur marszu liczyć, 1-4 (domyślnie 2)"},
+                "jednostka": {"type": "string",
+                              "description": "policz tylko ten typ, np. Knights"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "gotowosc_wojenna",
         "description": (
             "Odpowiada na pytanie „uderzać teraz czy czekać” liczbami, nie "
@@ -536,6 +560,7 @@ TOOL_METHOD = {
     "korupcja": "ai_corruption",
     "plan_budowy": "ai_build_plan",
     "gotowosc_wojenna": "ai_war_readiness",
+    "mobilnosc": "ai_mobility",
 }
 
 
@@ -635,6 +660,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_build_plan(dict(args))
     if name == "gotowosc_wojenna":
         return bridge.ai_war_readiness(dict(args))
+    if name == "mobilnosc":
+        return bridge.ai_mobility(dict(args))
     return {"blad": f"{i18n._('nieznane narzędzie')}: {name}"}
 
 
