@@ -16,17 +16,49 @@ from __future__ import annotations
 
 import argparse
 import json
+import secrets
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import i18n
+from . import i18n, webui
 from .i18n import _
 from .aitools import TOOL_SPECS, dispatch, localized_specs
 from .control import ControlClient
 from .headless import HeadlessBridge
 
 MAX_BODY = 256 * 1024
+
+
+class ChatSessions:
+    """Historia rozmowy dla klientow webowych.
+
+    Klucz to token sesji przyslany przez przegladarke; bez niego wszyscy
+    dzielilyby jedna historie. Trzymamy to w pamieci procesu - serwer i tak
+    zyje tyle, co partia.
+    """
+
+    def __init__(self, limit: int = 8):
+        self._by_id: dict[str, object] = {}
+        self._order: list[str] = []
+        self._limit = limit
+        self._lock = threading.Lock()
+
+    def get(self, sid: str):
+        from .chat import Conversation
+        with self._lock:
+            if sid not in self._by_id:
+                self._by_id[sid] = Conversation()
+                self._order.append(sid)
+                while len(self._order) > self._limit:
+                    self._by_id.pop(self._order.pop(0), None)
+            return self._by_id[sid]
+
+    def clear(self, sid: str) -> None:
+        with self._lock:
+            conv = self._by_id.get(sid)
+            if conv is not None:
+                conv.clear()
 
 
 class Engine:
@@ -62,6 +94,9 @@ class Engine:
             result = dispatch(self._local(), name, args)
         return {**result, "zrodlo": "silnik lokalny"} \
             if isinstance(result, dict) else result
+
+
+SESSIONS = ChatSessions()
 
 
 def openapi_schema() -> dict:
@@ -129,6 +164,18 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ pomocnicze
 
+    def _send_html(self, body: str) -> None:
+        raw = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _wants_html(self) -> bool:
+        return "text/html" in (self.headers.get("Accept") or "")
+
     def _send(self, code: int, payload: dict) -> None:
         payload = i18n.translate(payload)
         body = json.dumps(payload, ensure_ascii=False, default=str,
@@ -150,8 +197,15 @@ class Handler(BaseHTTPRequestHandler):
         return i18n.set_language(
             i18n.normalize(want or self.headers.get("Accept-Language")))
 
+    # sama strona nie zawiera zadnych danych partii, wiec moze pojsc bez tokenu -
+    # inaczej przegladarka nie mialaby jak o token poprosic
+    PUBLIC_PATHS = ("/", "/ui")
+
     def _authorized(self) -> bool:
         if not self.token:
+            return True
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        if path in self.PUBLIC_PATHS and self.command == "GET" and self._wants_html():
             return True
         header = self.headers.get("Authorization", "")
         return header == f"Bearer {self.token}"
@@ -177,7 +231,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._send(401, {"blad": _("brak lub zły token")})
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
-        if path == "/":
+        if path in ("/", "/ui"):
+            if path == "/ui" or self._wants_html():
+                return self._send_html(webui.page(i18n.language()))
+            return self._send(200, INDEX)
+        if path == "/api":
             return self._send(200, INDEX)
         if path in ("/zdrowie", "/health"):
             return self._send(200, {"status": "ok", "zrodlo": self.engine.source()})
@@ -212,6 +270,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, result)
             return self._call("policz", {})
 
+        if path in ("/czat", "/chat"):
+            return self._chat(body)
+
         if path.startswith(("/narzedzie/", "/tool/")):
             name = path.split("/", 2)[2]
             known = {t["name"] for t in TOOL_SPECS}
@@ -222,6 +283,86 @@ class Handler(BaseHTTPRequestHandler):
             return self._call(name, body)
 
         return self._send(404, {"blad": f"{_('nie ma ścieżki')} {path}"})
+
+    def _chat(self, body: dict) -> None:
+        """Rozmowa z asystentem, strumieniowana jako Server-Sent Events.
+
+        Uzywamy tej samej petli, co okno (`chat.stream_reply`), i tego samego
+        dispatchera narzedzi - wiec asystent w przegladarce steruje dokladnie
+        tym samym silnikiem, lacznie z otwartym oknem aplikacji, jesli dziala.
+        """
+        from . import aicreds
+        from .chat import stream_reply
+
+        text = str(body.get("tekst") or body.get("text") or "").strip()
+        if not text:
+            return self._send(400, {"blad": "puste pytanie"})
+
+        creds = aicreds.detect_credentials()
+        if not creds.ok:
+            return self._send(503, {
+                "blad": _("Brak klucza API"),
+                "podpowiedz": "ANTHROPIC_API_KEY albo ~/.config/fcsiege/credentials.json",
+            })
+        try:
+            client = aicreds.make_client(creds)
+        except Exception as exc:  # noqa: BLE001
+            return self._send(503, {"blad": f"{type(exc).__name__}: {exc}"})
+
+        sid = str(body.get("sesja") or self.headers.get("X-FCSiege-Session") or "web")
+        if body.get("wyczysc") or body.get("clear"):
+            SESSIONS.clear(sid)
+        conversation = SESSIONS.get(sid)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        lang = i18n.language()
+
+        def emit(payload: dict) -> bool:
+            try:
+                self.wfile.write(b"data: " + json.dumps(
+                    payload, ensure_ascii=False, default=str).encode("utf-8")
+                    + b"\n\n")
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        broken = False
+
+        def run_tool(name: str, args: dict):
+            return self.engine.call(i18n.canonical_tool(name),
+                                    i18n.untranslate_args(args))
+
+        try:
+            note = ""
+            try:
+                note = json.dumps(self.engine.call("pokaz_stan", {}),
+                                  ensure_ascii=False, default=str)[:1500]
+            except Exception:  # noqa: BLE001 - kontekst jest mile widziany, nie konieczny
+                pass
+            for event in stream_reply(client, conversation, text, run_tool,
+                                      note, lambda: broken, lang):
+                kind = event[0]
+                if kind in ("delta", "thinking", "error"):
+                    ok = emit({"typ": kind, "tekst": event[1]})
+                elif kind == "tool_start":
+                    ok = emit({"typ": kind, "nazwa": event[1], "argumenty": event[2]})
+                elif kind == "tool_end":
+                    ok = emit({"typ": kind, "nazwa": event[1]})
+                else:
+                    ok = emit({"typ": "done"})
+                if not ok:
+                    broken = True
+                    return
+        except Exception as exc:  # noqa: BLE001
+            emit({"typ": "error", "tekst": f"{type(exc).__name__}: {exc}"})
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)
@@ -239,12 +380,49 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, result)
 
 
+def tailscale_address() -> str | None:
+    """Adres tego komputera w tailnecie, albo None.
+
+    Najpierw pytamy `tailscale ip -4`, bo to zrodlo prawdy. Gdy CLI nie ma,
+    szukamy adresu z zakresu CGNAT 100.64.0.0/10, ktorego Tailscale uzywa.
+    """
+    import shutil
+    import socket
+    import subprocess
+
+    exe = shutil.which("tailscale")
+    if exe:
+        try:
+            out = subprocess.run([exe, "ip", "-4"], capture_output=True,
+                                 text=True, timeout=5)
+            first = (out.stdout or "").strip().splitlines()
+            if out.returncode == 0 and first:
+                return first[0].strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        infos = []
+    for info in infos:
+        addr = info[4][0]
+        octets = addr.split(".")
+        if len(octets) == 4 and octets[0] == "100" and 64 <= int(octets[1]) <= 127:
+            return addr
+    return None
+
+
 def serve(host: str, port: int, engine: Engine, token: str | None) -> None:
     handler = type("BoundHandler", (Handler,), {"engine": engine, "token": token})
     httpd = ThreadingHTTPServer((host, port), handler)
     where = f"http://{host}:{port}"
     print(f"FCSiege API słucha na {where} (źródło: {engine.source()})",
           file=sys.stderr)
+    print(f"Interfejs webowy: {where}/ui", file=sys.stderr)
+    if token:
+        print(f"Link z tokenem (jednorazowy, potraktuj jak hasło):\n"
+              f"  {where}/ui?token={token}", file=sys.stderr)
     if host not in ("127.0.0.1", "localhost", "::1") and not token:
         print("UWAGA: serwer jest wystawiony poza localhost bez tokenu — "
               "każdy w sieci może sterować kalkulatorem.", file=sys.stderr)
@@ -266,8 +444,22 @@ def main(argv: list[str] | None = None) -> int:
                     help="czy sterować uruchomionym oknem aplikacji")
     ap.add_argument("--token", default=None,
                     help="wymagaj nagłówka Authorization: Bearer <token>")
+    ap.add_argument("--tailscale", action="store_true",
+                    help="nasłuchuj na adresie z tailnetu i wygeneruj token, "
+                         "jeśli go nie podano")
     args = ap.parse_args(argv)
-    serve(args.host, args.port, Engine(args.ruleset, args.attach), args.token)
+    host, token = args.host, args.token
+    if args.tailscale:
+        address = tailscale_address()
+        if address is None:
+            print("Nie znalazłem adresu w tailnecie. Czy Tailscale działa "
+                  "(`tailscale status`)?", file=sys.stderr)
+            return 2
+        host = address
+        if not token:
+            token = secrets.token_urlsafe(24)
+            print("Wygenerowałem token na tę sesję.", file=sys.stderr)
+    serve(host, args.port, Engine(args.ruleset, args.attach), token)
     return 0
 
 

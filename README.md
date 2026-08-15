@@ -216,6 +216,65 @@ curl -s localhost:8765/policz -H "Authorization: Bearer tajne" \
 Token jest opcjonalny lokalnie, ale wymagany, jeśli wystawiasz `--host` poza
 localhost — serwer ostrzega, gdy tego nie zrobisz.
 
+## Interfejs webowy przez Tailscale
+
+Silnik zostaje na komputerze — tam, gdzie leżą zapisy gry — a telefon jest
+cienkim klientem. Nic nie trzeba synchronizować i nic nie wychodzi do internetu.
+
+```bash
+python3 fcsiege.py api --tailscale
+```
+
+Serwer sam znajduje adres tego komputera w tailnecie (`tailscale ip -4`, a gdy
+CLI nie ma — adres z zakresu CGNAT `100.64.0.0/10`), losuje token na tę sesję
+i wypisuje link:
+
+```
+FCSiege API słucha na http://100.x.y.z:8765 (źródło: okno aplikacji)
+Interfejs webowy: http://100.x.y.z:8765/ui
+Link z tokenem (jednorazowy, potraktuj jak hasło):
+  http://100.x.y.z:8765/ui?token=…
+```
+
+Otwierasz ten link na telefonie raz — strona chowa token w `localStorage`
+i wymazuje go z paska adresu, żeby nie został w historii. Potem wystarczy
+`http://100.x.y.z:8765/ui`.
+
+Strona ma trzy zakładki: **Partia** (wczytanie zapisu, przełącznik pełnego
+wglądu, raporty), **Kalkulator** (scenariusz i obliczenie) oraz **Asystent**
+(czat ze strumieniowaniem, z podglądem wywoływanych narzędzi). Jest jednym
+plikiem bez żadnych zewnętrznych zasobów — działa też, gdy telefon nie ma
+internetu, byle był w tailnecie.
+
+**Najważniejsze:** przy `--attach auto` (domyślnie) żądania z telefonu sterują
+**otwartym oknem aplikacji** — przestawiają w nim kontrolki i czytają jego stan.
+Telefon i komputer patrzą na jedną partię, nie na dwie kopie.
+
+### Bezpieczeństwo
+
+* Bez `--tailscale` serwer nasłuchuje tylko na `127.0.0.1`.
+* Wystawienie poza localhost bez tokenu kończy się ostrzeżeniem na stderr.
+* **Sama strona** wychodzi bez tokenu — inaczej przeglądarka nie miałaby jak
+  o token poprosić. Nie ma w niej żadnych danych partii; **każde** żądanie
+  o dane wymaga nagłówka `Authorization: Bearer …`.
+* Bind na adres z tailnetu, nie na `0.0.0.0` — Tailscale daje szyfrowanie
+  WireGuardem i tożsamość urządzenia, więc nic nie musi być publiczne.
+
+### Czat po HTTP
+
+```
+POST /czat            {"tekst": "…", "sesja": "web", "wyczysc": false}
+     -> text/event-stream
+        data: {"typ":"tool_start","nazwa":"korupcja","argumenty":"{}"}
+        data: {"typ":"tool_end","nazwa":"korupcja"}
+        data: {"typ":"delta","tekst":"…"}
+        data: {"typ":"done"}
+```
+
+Pętla rozmowy siedzi w `fcsiege/chat.py` i **nie zna Qt** — okno zamienia jej
+zdarzenia na sygnały Qt, serwer na SSE. Jedna implementacja, nie dwie, które po
+miesiącu by się rozjechały.
+
 ## Jeden silnik, trzy powierzchnie
 
 Okno, MCP i API liczą tym samym kodem. Narzędzia są zdefiniowane raz
@@ -417,6 +476,7 @@ python3 tests/test_combat.py    # silnik walki
 python3 tests/test_chat.py      # asystent (bez sieci, klient podstawiony)
 python3 tests/test_surfaces.py  # MCP, API HTTP, gniazdo sterujące
 python3 tests/test_i18n.py      # dwujęzyczność: okno, narzędzia, API
+python3 tests/test_webui.py     # strona, token, strumień SSE czatu
 ```
 
 `test_surfaces.py` sprawdza zgodność silnika bez Qt z oknem, uruchamia serwer MCP
@@ -476,7 +536,10 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/savegame.py` | czytanie zapisów gry, geometria mapy, korupcja, plan budowy |
 | `fcsiege/i18n.py` | katalogi polski↔angielski dla okna, narzędzi i odpowiedzi |
 | `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
-| `fcsiege/aiclient.py` | poświadczenia i pętla rozmowy ze strumieniowaniem |
+| `fcsiege/chat.py` | pętla rozmowy z Claude jako generator zdarzeń — bez Qt |
+| `fcsiege/aicreds.py` | poświadczenia do API Anthropica — bez Qt |
+| `fcsiege/aiclient.py` | adapter pętli rozmowy na sygnały Qt (dla okna) |
+| `fcsiege/webui.py` | strona serwowana przez API (telefon w tailnecie) |
 | `fcsiege/chatpanel.py` | interfejs czatu i logowania |
 | `tools/screenshots.py` | generuje zrzuty do `docs/` (działa bez ekranu) |
 
