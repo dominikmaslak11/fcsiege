@@ -50,6 +50,14 @@ TEXTS = {
         "watching": "nasłuchuję zapisów",
         "newsave": "Nowy zapis",
         "dismiss": "Zamknij",
+        "tab_an": "Analiza",
+        "refresh": "Odśwież analizę",
+        "running": "Liczę…",
+        "auto": "odświeża się sama po każdej turze",
+        "diplo": "Układy",
+        "growth": "Wzrost i prace",
+        "waste": "Korupcja",
+        "logi": "Logistyka",
     },
     "en": {
         "title": "FCSiege",
@@ -88,6 +96,14 @@ TEXTS = {
         "watching": "watching savegames",
         "newsave": "New savegame",
         "dismiss": "Dismiss",
+        "tab_an": "Analysis",
+        "refresh": "Refresh analysis",
+        "running": "Computing…",
+        "auto": "refreshes itself after every turn",
+        "diplo": "Treaties",
+        "growth": "Growth and works",
+        "waste": "Waste",
+        "logi": "Logistics",
     },
 }
 
@@ -328,6 +344,17 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
     <div class="card" id="calccard" hidden><h2>{t[compute]}</h2><div id="calcout"></div></div>
   </section>
 
+  <section class="panel" id="p-an">
+    <div class="card">
+      <h2>{t[tab_an]}</h2>
+      <div class="row">
+        <button class="btn" id="btn-an">{t[refresh]}</button>
+      </div>
+      <p class="hint" id="anhint">{t[auto]}</p>
+    </div>
+    <div id="anout"></div>
+  </section>
+
   <section class="panel" id="p-chat">
     <div id="chatlog"></div>
   </section>
@@ -344,6 +371,7 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
 <nav role="tablist">
   <button role="tab" aria-selected="true" data-panel="p-game">{t[tab_game]}</button>
   <button role="tab" aria-selected="false" data-panel="p-calc">{t[tab_calc]}</button>
+  <button role="tab" aria-selected="false" data-panel="p-an">{t[tab_an]}</button>
   <button role="tab" aria-selected="false" data-panel="p-chat">{t[tab_chat]}</button>
 </nav>
 
@@ -679,6 +707,74 @@ $("#ask").addEventListener("keydown", (e) => {{
   if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); send(); }}
 }});
 
+/* ── pełna analiza: przyciskiem i po każdej turze ────────────────── */
+function sekcja(tytul, tresc) {{
+  const card = el("div", "card");
+  card.append(el("h2", null, tytul));
+  card.append(tresc);
+  return card;
+}}
+
+function listaProstych(obj, pola) {{
+  const box = el("div", "stats");
+  pola.forEach(([klucz, etykieta]) => {{
+    const v = obj[klucz];
+    if (v === undefined || v === null || typeof v === "object") return;
+    const tile = el("div", "tile");
+    tile.append(el("b", null, String(v)), el("span", null, etykieta));
+    box.append(tile);
+  }});
+  return box;
+}}
+
+async function runAnalysis() {{
+  const btn = $("#btn-an");
+  btn.disabled = true;
+  $("#anhint").textContent = "{t[running]}";
+  try {{
+    const r = await fetch(url("/analiza"), {{ headers: headers() }});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    const out = $("#anout");
+    out.textContent = "";
+
+    const al = d.alerty || d.alerts || {{}};
+    renderAlerts(al.alerty || al.alerts || []);
+
+    const dip = d.uklady_dyplomatyczne || d.treaties || {{}};
+    if (dip.uklady || dip.treaties) {{
+      out.append(sekcja("{t[diplo]}", renderTable(dip.uklady || dip.treaties)));
+    }}
+    const gr = d.potencjal_wzrostu || d.growth_potential || {{}};
+    if (gr.plan_robot || gr.worker_plan) {{
+      const box = el("div");
+      box.append(listaProstych(gr, [
+        ["prac_lacznie", "prac"], ["jobs_total", "jobs"],
+        ["zywnosci_do_zyskania", "+ żywności"], ["food_to_gain", "+ food"],
+        ["tur_pracy_lacznie", "tur pracy"], ["worker_turns_total", "worker turns"]
+      ]));
+      box.append(renderTable((gr.plan_robot || gr.worker_plan).slice(0, 15)));
+      out.append(sekcja("{t[growth]}", box));
+    }}
+    const ko = d.korupcja || d.waste || {{}};
+    if (ko.miasta || ko.cities) {{
+      out.append(sekcja("{t[waste]}", renderTable((ko.miasta || ko.cities).slice(0, 12))));
+    }}
+    const mo = d.mobilnosc || d.mobility || {{}};
+    if (mo.punkty_zborne || mo.rally_points) {{
+      out.append(sekcja("{t[logi]}",
+        renderTable((mo.punkty_zborne || mo.rally_points).slice(0, 10))));
+    }}
+    $("#anhint").textContent = "{t[auto]}";
+  }} catch (e) {{
+    $("#anhint").textContent = String(e.message);
+  }} finally {{
+    btn.disabled = false;
+  }}
+}}
+
+$("#btn-an").addEventListener("click", runAnalysis);
+
 /* ── powiadomienia o nowym zapisie ───────────────────────────────── */
 function toast(a) {{
   const box = el("div", "toast " + (a.waga || a.severity || ""));
@@ -741,6 +837,7 @@ async function watchSaves() {{
           alerts.filter((a) => ["krytyczne", "pilne", "critical", "urgent"]
             .includes(a.waga || a.severity)).slice(0, 3).forEach(toast);
           $("#state").textContent = (ev.plik || ev.file || "{t[newsave]}").slice(0, 28);
+          runAnalysis();          // nowa tura -> przelicz wszystko od nowa
         }}
       }}
     }} catch (e) {{ /* zerwane połączenie — próbujemy dalej */ }}

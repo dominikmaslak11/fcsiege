@@ -3450,6 +3450,62 @@ def government_comparison(rs, intel: "Intel | None", govs: list[str] | None = No
         "zloto": me.gold,
     }
 
+    # --- co kazdy ustroj oznacza dla TEGO panstwa, a nie w oderwaniu
+    #
+    # Marnotrawstwo zalezy od odleglosci do stolicy, wiec liczymy je na
+    # faktycznym rozkladzie miast. Bez tego porownanie ustrojow jest
+    # bezuzyteczne dla rozleglego panstwa - a wlasnie dla takiego jest wazne.
+    intel = Intel(save) if not isinstance(save, Intel) else save
+    sec_me = save._sections[me.slot]
+    rows = list(sec_me.table("c").dicts()) if sec_me.table("c") else []
+    stolica = next(((int(r["x"]), int(r["y"])) for r in rows
+                    if "Palace" in set(save._bits(r.get("improvements")))), None)
+    dysty = [intel.geom.real_distance((int(r["x"]), int(r["y"])), stolica)
+             for r in rows] if stolica else []
+    mine_blds: set[str] = set()
+    for r in rows:
+        mine_blds |= set(save._bits(r.get("improvements")))
+    w_polu = sum(1 for u in save.units_of(me.slot)
+                 if (ut := rs.units.get(u.type)) and getattr(ut, "uk_happy", 0) > 0
+                 and (u.x, u.y) not in {(int(r["x"]), int(r["y"])) for r in rows})
+
+    def srednie_marnotrawstwo(gov: str, output: str) -> int | None:
+        if not dysty:
+            return None
+        total = 0
+        for d in dysty:
+            base = intel._city_effect(rs, "Output_Waste", output, {"Courthouse"},
+                                      gov, known, mine_blds, 8)
+            bd = intel._city_effect(rs, "Output_Waste_By_Distance", output,
+                                    {"Courthouse"}, gov, known, mine_blds, 8)
+            pc = intel._city_effect(rs, "Output_Waste_Pct", output, {"Courthouse"},
+                                    gov, known, mine_blds, 8)
+            lvl = base + bd * d // 100
+            lvl -= lvl * pc // 100
+            total += max(0, min(100, lvl))
+        return round(total / len(dysty))
+
+    for g, entry in out["ustroje"].items():
+        ml = intel._city_effect(rs, "Martial_Law_Each", "", set(), g, known,
+                                mine_blds, 0)
+        mlmax = intel._city_effect(rs, "Martial_Law_Max", "", set(), g, known,
+                                   mine_blds, 0)
+        rev = intel._city_effect(rs, "Revolution_Unhappiness", "", set(), g,
+                                 known, mine_blds, 0)
+        uf = max(1, intel._city_effect(rs, "Unhappy_Factor", "", set(), g, known,
+                                       mine_blds, 0))
+        mcm = intel._city_effect(rs, "Make_Content_Mil", "", set(), g, known,
+                                 mine_blds, 0)
+        entry["dla_mojego_panstwa"] = {
+            "marnotrawstwo_tarcz_srednio_proc": srednie_marnotrawstwo(g, "Shield"),
+            "marnotrawstwo_handlu_srednio_proc": srednie_marnotrawstwo(g, "Trade"),
+            "stan_wojenny": (f"{ml} za jednostkę, maks {mlmax}" if ml
+                             else "brak — garnizon nie uspokaja miasta"),
+            "jednostek_w_polu_bez_kosztu": mcm // uf,
+            "moje_jednostki_w_polu": w_polu,
+            "anarchia_po_turach_zamieszek": rev or "nigdy",
+        }
+
     for g, entry in out["ustroje"].items():
         need = entry["wymaga_technologii"]
         entry["dostepny_teraz"] = all(t in known for t in need) if known else None

@@ -283,6 +283,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"narzedzia": localized_specs()})
         if path == "/openapi.json":
             return self._send(200, openapi_schema())
+        if path in ("/analiza", "/analysis"):
+            return self._analysis()
         if path in ("/zdarzenia", "/events"):
             return self._events()
         if path in ("/stan", "/state"):
@@ -325,6 +327,35 @@ class Handler(BaseHTTPRequestHandler):
             return self._call(name, body)
 
         return self._send(404, {"blad": f"{_('nie ma ścieżki')} {path}"})
+
+    ANALIZA = (
+        ("alerty", {}),
+        ("uklady_dyplomatyczne", {}),
+        ("potencjal_wzrostu", {}),
+        ("korupcja", {}),
+        ("mobilnosc", {"tury": 2}),
+    )
+
+    def _analysis(self) -> None:
+        """Komplet analiz jednym zadaniem - dla przycisku i dla automatu.
+
+        Kazde narzedzie liczymy osobno i osobno lapiemy blad, zeby jedna
+        niedostepna analiza nie wywalila calego raportu.
+        """
+        out: dict = {}
+        for nazwa, args in self.ANALIZA:
+            # nazwa sekcji tez w jezyku zadania, inaczej klient dostaje
+            # angielska tresc pod polskimi kluczami
+            klucz = i18n.tool_name(nazwa)
+            try:
+                out[klucz] = self.engine.call(nazwa, dict(args))
+            except Exception as exc:  # noqa: BLE001
+                out[klucz] = {"blad": f"{type(exc).__name__}: {exc}"}
+        try:
+            out[i18n.tool_name("pokaz_stan")] = self.engine.call("pokaz_stan", {})
+        except Exception:  # noqa: BLE001
+            pass
+        return self._send(200, out)
 
     def _events(self) -> None:
         """Strumien zdarzen: nowy zapis gry -> stan partii i ostrzezenia.

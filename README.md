@@ -272,6 +272,21 @@ internetu, byle był w tailnecie.
 **otwartym oknem aplikacji** — przestawiają w nim kontrolki i czytają jego stan.
 Telefon i komputer patrzą na jedną partię, nie na dwie kopie.
 
+### Pełna analiza online
+
+```
+GET /analiza          (albo /analysis?lang=en)
+```
+
+Jedno żądanie liczy komplet: ostrzeżenia, układy dyplomatyczne, potencjał
+wzrostu z planem robót, korupcję i logistykę. Każda sekcja liczona osobno
+i osobno łapie błąd, żeby jedna niedostępna analiza nie wywaliła raportu.
+Całość zajmuje około sekundy.
+
+Interfejs webowy ma zakładkę **Analiza** z przyciskiem odświeżania, a poza tym
+**przelicza wszystko sam po każdej nowej turze** — strumień `/zdarzenia`
+sygnalizuje nowy zapis, a strona od razu odpytuje `/analiza`.
+
 ### Bezpieczeństwo
 
 * Bez `--tailscale` serwer nasłuchuje tylko na `127.0.0.1`.

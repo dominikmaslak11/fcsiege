@@ -223,6 +223,37 @@ def test_chat_stream() -> None:
         aicreds.detect_credentials, aicreds.make_client = saved_detect, saved_make
 
 
+def test_analysis() -> None:
+    print("\nZbiorcza analiza:")
+    srv = Server("tajne")
+    try:
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(srv.base + "/analiza"), timeout=20)
+            check("analiza wymaga tokenu", False)
+        except urllib.error.HTTPError as exc:
+            check("analiza wymaga tokenu", exc.code == 401)
+
+        i18n.set_language("pl")
+        _, _, raw = srv.get("/analiza")
+        pl = json.loads(raw)
+        check("po polsku wszystkie sekcje",
+              {"alerty", "korupcja", "mobilnosc"} <= set(pl), sorted(pl))
+        check("żadna sekcja się nie wywaliła",
+              not [k for k, v in pl.items() if isinstance(v, dict) and "blad" in v],
+              [k for k, v in pl.items() if isinstance(v, dict) and "blad" in v])
+
+        _, _, raw = srv.get("/analysis?lang=en")
+        en = json.loads(raw)
+        check("po angielsku nazwy sekcji też przetłumaczone",
+              {"alerts", "waste", "mobility"} <= set(en), sorted(en))
+        check("angielskie sekcje bez polskich kluczy",
+              not any(c in k for k in en for c in "ąćęłńóśźż"), sorted(en))
+    finally:
+        srv.close()
+        i18n.set_language("pl")
+
+
 def test_chat_without_key() -> None:
     print("\nCzat bez klucza:")
     saved = aicreds.detect_credentials
@@ -257,6 +288,7 @@ if __name__ == "__main__":
     test_page()
     test_serving()
     test_chat_stream()
+    test_analysis()
     test_chat_without_key()
     test_tailscale()
 
