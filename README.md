@@ -583,6 +583,28 @@ dróg**, dystans do stolicy i otoczenie. Miasto bez dróg i portu jest
 obciążeniem, nie nabytkiem — kosztuje utrzymanie, garnizon i szczęście, a nie
 daje produkcji.
 
+### Plan na turę
+
+`plan_tury` odpowiada na „co mam teraz robić" — produkcja miasto po mieście,
+suwaki podatków, cel badań i przeznaczenie złota. Rozpoznaje **fazę gry**
+z liczby miast, głębokości drzewa i tego, czy trwa wojna, żeby nie doradzać
+cudów świata w pierwszej turze. Parametr `nastawienie` (`pokojowe` /
+`wojenne` / `auto`) pozwala narzucić kierunek wbrew wykrytej fazie.
+
+Wszystkie progi czyta z reguł: maksymalny suwak ustroju, karę za kafel
+(despotyzm odbiera 1 z każdego kafla dającego więcej niż 2), próg kary za
+wielkość imperium. Cel badań wybiera jako **najtańszą drogę do lepszego
+ustroju**, przy czym zdjęcie kary za kafel waży więcej niż kilka punktów
+suwaka.
+
+Dwie pułapki, na które narzędzie musiało uważać, bo obie wywracały radę:
+
+* ustrój `Republic` wymaga technologii **`The Republic`** — nazwy się nie
+  pokrywają, więc wymagania czytamy z `[government_*]`, nie po nazwie,
+  a typ warunku reguły zapisują raz `"Tech"`, raz `"tech"`,
+* `Animal Kingdom` jest „w stanie wojny" od pierwszej tury, co bez filtra
+  ustawiało fazę na wojenną w turze 1.
+
 ### Plan kampanii
 
 `plan_kampanii` odpowiada na pytanie „jakie wydać rozkazy w tej turze", także

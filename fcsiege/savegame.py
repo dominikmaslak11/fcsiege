@@ -1695,7 +1695,14 @@ class Intel:
                 continue
             units.append((u, ut))
         if not units:
-            return {"blad": f"nie mam jednostek bojowych{' typu ' + jednostka if jednostka else ''}"}
+            return {"tury": tury, "jednostek_bojowych": 0, "grupy": [],
+                    "punkty_zborne": [], "cele_wroga_w_zasiegu": [],
+                    "rozciagniecie": {"w_polu": 0, "w_miastach": 0,
+                                      "odciete": [],
+                                      "wg_miasta_macierzystego": []},
+                    "uwaga": ("nie masz jeszcze jednostek bojowych"
+                              + (f" typu {jednostka}" if jednostka else "")
+                              + " — nie ma czego rozstawiać")}
 
         # --- moje i cudze miasta
         moje, obce = {}, {}
@@ -1802,6 +1809,233 @@ class Intel:
         }
 
 
+
+    # --------------------------------------------------------- plan na ture
+
+    def turn_plan(self, rs, nastawienie: str = "auto") -> dict:
+        """Co robic w tej turze: produkcja, podatki, badania, zloto.
+
+        Rada zalezy od fazy gry, a faze rozpoznajemy z liczby miast, glebokosci
+        drzewa i tego, czy trwa wojna - inaczej doradzalibysmy stolicy budowe
+        cudow w turze pierwszej. Wszystkie progi (kara despotyzmu, maksymalny
+        suwak, kara za wielkosc imperium) czytamy z regul, nie z pamieci.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        gov = s.me.government or ""
+        techs = _known_techs(s) - {"A_NONE"}
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        if not rows:
+            return {"blad": "brak miast"}
+        tmap = TerrainMap(s)
+
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+        # Animal Kingdom i barbarzyncy sa "w stanie wojny" od pierwszej tury -
+        # to nie jest wojna, tylko dzika zwierzyna
+        dzicy = {"Animal Kingdom", "Barbarian", "Pirate"}
+        wojna = [s.players[sl].nation for sl in s.players
+                 if sl != s.me.slot and s.me.diplomacy.get(sl) == "War"
+                 and s.players[sl].nation not in dzicy]
+        glebokosc = max((rs.tech_depth(t) for t in techs), default=0)
+        n_miast = len(rows)
+
+        # Nastawienie gracza jest nadrzedne wobec wykrytej fazy: ktos moze
+        # prowadzic wojne i mimo to chciec rozwijac gospodarke, i odwrotnie.
+        if n_miast <= 3 and glebokosc <= 3:
+            faza = "zasiedlanie"
+        elif glebokosc <= 6 and not wojna:
+            faza = "rozbudowa"
+        elif wojna:
+            faza = "wojna"
+        else:
+            faza = "rozwoj"
+        pokojowo = nastawienie == "pokojowe" or (
+            nastawienie == "auto" and faza != "wojna")
+        if nastawienie == "pokojowe" and faza == "wojna":
+            faza = "rozwoj"
+
+        # --- podatki
+        maks = self._city_effect(rs, "Max_Rates", "", set(), gov, techs,
+                                 mine_blds, 0) or 100
+        kara_kafla = self._city_effect(rs, "Output_Penalty_Tile", "", set(),
+                                       gov, techs, mine_blds, 0)
+        e_base = self._city_effect(rs, "Empire_Size_Base", "", set(), gov,
+                                   techs, mine_blds, 0)
+        e_step = self._city_effect(rs, "Empire_Size_Step", "", set(), gov,
+                                   techs, mine_blds, 0)
+        zloto = sec.int("gold")
+        obecne = {"podatki": sec.int("rates.tax"),
+                  "nauka": sec.int("rates.science"),
+                  "luksus": sec.int("rates.luxury")}
+        if zloto < 30:
+            rada_pod = {"podatki": maks, "nauka": 100 - maks, "luksus": 0,
+                        "dlaczego": f"złota tylko {zloto} — najpierw wypłacalność"}
+        elif faza in ("zasiedlanie", "rozbudowa"):
+            rada_pod = {"podatki": 100 - maks, "nauka": maks, "luksus": 0,
+                        "dlaczego": ("na tym etapie technologie są warte więcej "
+                                     f"niż złoto; {gov} pozwala na {maks}%")}
+        else:
+            rada_pod = {"podatki": max(0, 100 - maks - 10), "nauka": maks,
+                        "luksus": 10,
+                        "dlaczego": "przy większym państwie trochę luksusu "
+                                    "tanio kupuje spokój"}
+
+        # --- badania: co odblokowuje ustroj lepszy od obecnego
+        lepsze = []
+        for g in rs.governments:
+            if g in ("Anarchy", gov):
+                continue
+            mr = self._city_effect(rs, "Max_Rates", "", set(), g, techs,
+                                   mine_blds, 0)
+            eb = self._city_effect(rs, "Empire_Size_Base", "", set(), g, techs,
+                                   mine_blds, 0)
+            kp = self._city_effect(rs, "Output_Penalty_Tile", "", set(), g,
+                                   techs, mine_blds, 0)
+            if mr > maks or eb > e_base or kp < kara_kafla:
+                # wymagania bierzemy z regul ustroju, bo nazwa ustroju nie
+                # musi sie pokrywac z nazwa technologii (Republic / The Republic)
+                brak = sorted({t for wym in rs.gov_techs.get(g, [])
+                               for t in rs._closure(wym, set())
+                               if t in rs.techs and t not in techs})
+                lepsze.append({"ustroj": g, "maks_suwak": mr,
+                               "kara_za_miast": eb, "kara_kafla": kp,
+                               "brakuje_technologii": brak,
+                               "ile_technologii": len(brak)})
+        # ustroj dostepny od reki to nie cel badan, tylko decyzja do podjecia
+        od_reki = [x for x in lepsze if not x["ile_technologii"]]
+        do_zbadania = [x for x in lepsze if x["ile_technologii"]]
+        # wsrod tych do zbadania liczy sie zysk na technologie, a zdjecie kary
+        # za kafel wazy wiecej niz kilka punktow suwaka
+        do_zbadania.sort(key=lambda x: (
+            x["ile_technologii"] + (0 if x["kara_kafla"] < kara_kafla else 3),
+            -x["maks_suwak"]))
+        lepsze = do_zbadania
+
+        cel_badan = None
+        if do_zbadania:
+            cel = do_zbadania[0]
+            cel_badan = {
+                "cel": cel["ustroj"],
+                "brakuje": cel["brakuje_technologii"],
+                "dlaczego": (
+                    f"{gov} ogranicza suwak do {maks}% i nakłada karę "
+                    f"{kara_kafla} na kafel; {cel['ustroj']} daje "
+                    f"{cel['maks_suwak']}% i karę {cel['kara_kafla']}"
+                    if kara_kafla else
+                    f"{cel['ustroj']} podnosi suwak do {cel['maks_suwak']}% "
+                    f"i próg kary za wielkość do {cel['kara_za_miast']} miast"),
+            }
+
+        # --- produkcja miasto po miescie
+        dostepne = {u.name for u in rs.units_available(techs)}
+        def da_sie_zbudowac(u) -> bool:
+            return (u.build_cost > 0 and "NoBuild" not in u.flags
+                    and "NonMil" not in u.flags)
+
+        tanie_obronne = sorted(
+            (u for u in rs.units_available(techs)
+             if u.defense > 0 and da_sie_zbudowac(u)
+             and rs.uclass_of(u).name in ("Land", "Small Land", "Big Land")),
+            key=lambda u: (u.build_cost / max(1, u.defense)))
+        obronca = tanie_obronne[0].name if tanie_obronne else None
+        osadnik = next((u.name for u in rs.units_available(techs)
+                        if "Cities" in u.flags and u.build_cost > 0
+                        and "NoBuild" not in u.flags), None)
+        robotnik = next((u.name for u in rs.units_available(techs)
+                         if "Settlers" in u.flags and "Cities" not in u.flags
+                         and "AddToCity" not in u.flags and u.build_cost > 0
+                         and "NoBuild" not in u.flags), None)
+
+        ml = self._city_effect(rs, "Martial_Law_Each", "", set(), gov, techs,
+                               mine_blds, 0)
+        garnizon = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                garnizon[(u.x, u.y)] += 1
+
+        produkcja = []
+        for r in rows:
+            x, y = int(r["x"]), int(r["y"])
+            nazwa = str(r.get("name") or "?")
+            blds = set(s._bits(r.get("improvements")))
+            teraz = str(r.get("currently_building_name") or "")
+            ma_garnizon = garnizon.get((x, y), 0) > 0
+            rozmiar = int(r.get("size") or 0)
+
+            if not ma_garnizon and obronca:
+                co, why = obronca, (
+                    "brak garnizonu — jedna jednostka to obrona, stan wojenny "
+                    "i podwojony koszt przekupienia miasta"
+                    if ml else "brak garnizonu — miasto stoi otworem")
+            elif faza == "zasiedlanie" and osadnik:
+                co, why = osadnik, "więcej miast bije wszystko inne na starcie"
+            elif pokojowo and robotnik:
+                co, why = robotnik, (
+                    "nastawienie pokojowe: robotnik zwraca się w każdej turze "
+                    "irygacji i drogi, a nie kosztuje szczęścia w polu")
+            elif faza in ("zasiedlanie", "rozbudowa") and osadnik and rozmiar >= 2:
+                co, why = osadnik, "miasto urosło — stać je na osadnika"
+            elif robotnik:
+                co, why = robotnik, ("teren wokół daje mniej, niż mógłby — "
+                                     "irygacja i drogi")
+            else:
+                co, why = (obronca or "Coinage"), "brak lepszego celu"
+
+            brak_bud = [b.name for b in rs.buildings.values()
+                        if not b.is_wonder and b.name not in blds
+                        and all(t in techs for t in b.req_techs())
+                        and b.upkeep == 0]
+            produkcja.append({
+                "miasto": nazwa, "rozmiar": rozmiar,
+                "buduje_teraz": teraz,
+                "buduj": co, "dlaczego": why,
+                "ma_garnizon": ma_garnizon,
+                "budynki_bez_utrzymania_do_wziecia": sorted(brak_bud)[:3],
+                "zmiana": teraz != co,
+            })
+
+        inwestycje = []
+        if zloto >= 100:
+            inwestycje.append("dokupuj osadników w miastach, które i tak ich "
+                              "budują — na starcie tura przewagi jest warta "
+                              "więcej niż złoto")
+        if kara_kafla:
+            inwestycje.append(
+                f"{gov} odbiera 1 z każdego kafla dającego więcej niż "
+                f"{kara_kafla} — dlatego zmiana ustroju jest pilniejsza niż "
+                f"jakikolwiek budynek")
+        if n_miast >= e_base:
+            inwestycje.append(
+                f"masz {n_miast} miast przy progu {e_base} — od tego miejsca "
+                f"każde kolejne miasto dokłada niezadowolonych co {e_step}")
+
+        if pokojowo:
+            inwestycje.append(
+                "koszary kosztują złoto co turę i dają tylko stopień weterana "
+                "— przy nastawieniu pokojowym buduj je wyłącznie tam, gdzie "
+                "faktycznie rekrutujesz wojsko")
+        return {
+            "faza": faza,
+            "nastawienie": "pokojowe" if pokojowo else "wojenne",
+            "ustroj": gov, "miast": n_miast, "zloto": zloto,
+            "wojna_z": wojna,
+            "podatki_teraz": obecne,
+            "podatki_rada": rada_pod,
+            "maksymalny_suwak": maks,
+            "kara_despotyzmu_na_kafel": kara_kafla or None,
+            "badania_cel": cel_badan,
+            "ustroje_dostepne_od_reki": [x["ustroj"] for x in od_reki],
+            "lepsze_ustroje": lepsze[:3],
+            "produkcja": produkcja,
+            "do_zmiany": sum(1 for p in produkcja if p["zmiana"]),
+            "inwestycje": inwestycje,
+        }
+
     # -------------------------------------------------------- plan kampanii
 
     def campaign_plan(self, rs, tury: int = 2, rezerwa: int = 1) -> dict:
@@ -1840,7 +2074,11 @@ class Intel:
             if ut and ut.attack > 0 and "NonMil" not in ut.flags:
                 moje.append((u, ut))
         if not moje:
-            return {"blad": "nie mam jednostek zaczepnych"}
+            return {"fronty": sorted({s.players[sl].nation for sl in wrogowie
+                                      if sl in s.players}),
+                    "moich_zaczepnych": 0, "zaangazowanych": 0,
+                    "w_rezerwie": 0, "rozkazy": [], "odlozone": [],
+                    "uwaga": "nie masz jednostek zaczepnych — najpierw je zbuduj"}
 
         najlepszy = max((ut for _u, ut in moje), key=lambda t: t.attack)
         rows = list(s._sections[s.me.slot].table("c").dicts())
@@ -3432,6 +3670,10 @@ class IntelMixin:
         return self._need_intel().mobility(
             self._intel_ruleset(), int(args.get("tury") or 2),
             str(args.get("jednostka", "")))
+
+    def ai_turn_plan(self, args: dict) -> dict:
+        return self._need_intel().turn_plan(
+            self._intel_ruleset(), str(args.get("nastawienie", "auto")))
 
     def ai_campaign(self, args: dict) -> dict:
         return self._need_intel().campaign_plan(

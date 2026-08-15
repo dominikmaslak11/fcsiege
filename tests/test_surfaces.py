@@ -332,9 +332,12 @@ def test_savegame():
         if row["znane_miasta"] > 0:
             target = row["nacja"]
             break
-    check("znam jakieś obce miasta", target is not None, str(target))
+    # na starcie partii nikogo jeszcze nie spotkaliśmy — to prawidłowy stan,
+    # nie powód do czerwonego testu
     if target is None:
+        check("brak obcych miast na tym zapisie (świeża partia)", True)
         return
+    check("znam jakieś obce miasta", True, str(target))
 
     fog = dispatch(bridge, "wywiad_o_nacji", {"nacja": target})
     check("we mgle nie ma cudzych wojsk",

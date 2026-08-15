@@ -228,6 +228,7 @@ class Ruleset:
         self.buildings: dict[str, Building] = {}
         self.techs: dict[str, Tech] = {}
         self.governments: list[str] = []
+        self.gov_techs: dict[str, list[str]] = {}
         self.effects: list[Effect] = []
         self.effects_by_type: dict[str, list[Effect]] = {}
         self.combat: CombatRules = CombatRules()
@@ -256,8 +257,15 @@ class Ruleset:
             return
         for sec in reg.prefixed("government_"):
             name = rule_name_of(sec)
-            if name:
-                self.governments.append(name)
+            if not name:
+                continue
+            self.governments.append(name)
+            # nazwa ustroju nie musi sie pokrywac z nazwa technologii:
+            # ustroj "Republic" wymaga technologii "The Republic"
+            # reguly zapisuja typ raz "Tech", raz "tech" - porownujemy bez
+            # wzgledu na wielkosc liter
+            self.gov_techs[name] = [r.name for r in self._reqs_from(sec)
+                                    if r.type.lower() == "tech" and r.present]
 
     @staticmethod
     def _reqs_from(sec: Section, key: str = "reqs") -> list[Req]:

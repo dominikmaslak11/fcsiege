@@ -365,6 +365,17 @@ KEYS: dict[str, str] = {
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
+    "faza": "stage", "nastawienie": "posture", "podatki_teraz": "rates_now", "podatki_rada": "rates_advice",
+    "podatki": "tax", "nauka": "science", "luksus": "luxury",
+    "maksymalny_suwak": "rate_cap", "kara_despotyzmu_na_kafel": "per_tile_penalty",
+    "badania_cel": "research_goal", "lepsze_ustroje": "better_governments",
+    "produkcja": "production", "buduj": "build", "buduje_teraz": "building_now",
+    "ma_garnizon": "has_garrison", "zmiana": "change",
+    "budynki_bez_utrzymania_do_wziecia": "free_upkeep_buildings_available",
+    "do_zmiany": "to_change", "inwestycje": "investments",
+    "wojna_z": "at_war_with", "kara_za_miast": "penalty_from_cities",
+    "kara_kafla": "tile_penalty", "maks_suwak": "rate_cap",
+    "ile_technologii": "techs_needed", "ustroj": "government",
     "rozkazy": "orders", "odlozone": "postponed", "cel": "target",
     "wyslij_jednostek": "send_units", "w_tym_do_walki": "of_which_to_fight",
     "w_tym_garnizon": "of_which_garrison", "skad": "from",
@@ -557,6 +568,7 @@ TOOL_NAMES: dict[str, str] = {
     "plan_budowy": "build_plan",
     "gotowosc_wojenna": "war_readiness",
     "plan_kampanii": "campaign_plan",
+    "plan_tury": "turn_plan",
     "mobilnosc": "mobility",
     "alerty": "alerts",
     "uklady_dyplomatyczne": "treaties",
@@ -675,6 +687,15 @@ TOOL_DESC: dict[str, str] = {
         "of troops standing in the field. Call it for questions about "
         "regrouping, an overstretched front, \"will I make it\", \"where do "
         "I gather\", \"should I uncover this border\".",
+    "plan_tury":
+        "What to do this turn: what to build in each city, how to set the tax "
+        "sliders, which research to pick and what to spend gold on. The advice "
+        "depends on the stage of the game, which the tool infers from the "
+        "number of cities, the depth of the technology tree and whether a war "
+        "is on — otherwise it would recommend wonders on turn one. Every "
+        "threshold (the government's per-tile penalty, the rate cap, the "
+        "empire-size threshold) is read from the rules. This is the "
+        "first-choice tool for \"what should I do now\".",
     "plan_kampanii":
         "Concrete orders for this turn in a war, including a war on several "
         "fronts. It joins three things that are insufficient separately: what "

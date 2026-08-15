@@ -405,6 +405,31 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "plan_tury",
+        "description": (
+            "Co robić w tej turze: co budować w każdym mieście, jak ustawić "
+            "suwaki podatków, jakie badania obrać i w co włożyć złoto. Rada "
+            "zależy od fazy gry, a fazę narzędzie rozpoznaje z liczby miast, "
+            "głębokości drzewa technologii i tego, czy trwa wojna — inaczej "
+            "doradzałoby cudy świata w pierwszej turze. Wszystkie progi (kara "
+            "ustroju za kafel, maksymalny suwak, próg kary za wielkość "
+            "imperium) czyta z reguł. To jest narzędzie pierwszego wyboru przy "
+            "pytaniu „co mam teraz robić”."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nastawienie": {
+                    "type": "string",
+                    "enum": ["auto", "pokojowe", "wojenne"],
+                    "description": "pokojowe = robotnicy, teren i cuda zamiast "
+                                   "wojska; auto = rozpoznaj z sytuacji",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "plan_kampanii",
         "description": (
             "Konkretne rozkazy na tę turę przy wojnie, także na kilku frontach. "
@@ -667,6 +692,7 @@ TOOL_METHOD = {
     "plan_budowy": "ai_build_plan",
     "gotowosc_wojenna": "ai_war_readiness",
     "plan_kampanii": "ai_campaign",
+    "plan_tury": "ai_turn_plan",
     "mobilnosc": "ai_mobility",
     "obrona_miasta": "ai_city_defense",
     "alerty": "ai_alerts",
@@ -774,6 +800,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_war_readiness(dict(args))
     if name == "plan_kampanii":
         return bridge.ai_campaign(dict(args))
+    if name == "plan_tury":
+        return bridge.ai_turn_plan(dict(args))
     if name == "mobilnosc":
         return bridge.ai_mobility(dict(args))
     if name == "obrona_miasta":
