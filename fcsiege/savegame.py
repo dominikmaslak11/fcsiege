@@ -400,35 +400,63 @@ def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
 
 
 def _enter_cost_fn(rs, tmap: TerrainMap, ut, full: int, blocked=None,
-                   goal=None):
+                   goal=None, geom=None, cities=None):
     """Zwraca funkcje (skad, dokad) -> koszt w ulamkach ruchu albo None.
 
     Wejscie kosztuje `movement_cost` pelnych ruchow, chyba ze oba kafle laczy
     ulepszenie liniowe - wtedy placi sie jego `move_cost` w ulamkach. Koszt jest
     ograniczony do pelnego zapasu jednostki.
+
+    Miasto jest "bezpieczna przystania": kafel z miastem jest dostepny dla
+    kazdej klasy, ktora ma obok siebie kafel natywny (movement.c,
+    can_exist_at_tile). Dzieki temu statek wplywa do nadmorskiego portu, choc
+    samo miasto stoi na ladzie.
     """
     single = max(1, rs.move_fragments)
     uclass = rs.uclass_of(ut)
     road_cost = _road_move_costs(rs)
+    cities = cities or set()
+
+    def native_near(tile: tuple[int, int]) -> bool:
+        if geom is None:
+            return False
+        for nb in geom.neighbours(*tile):
+            name = tmap.terrain(*nb)
+            terr = rs.terrains.get(name) if name else None
+            if terr is not None and uclass.name in terr.native_to:
+                return True
+        return False
 
     def cost(frm: tuple[int, int], to: tuple[int, int]) -> int | None:
         name = tmap.terrain(*to)
         terr = rs.terrains.get(name) if name else None
         if terr is None:
             return None
+        if blocked is not None and to != goal and blocked(*to):
+            return None                    # np. cudze terytorium przy pokoju
         best = None
         for extra, c in road_cost.items():
             if tmap.has_extra(extra, *frm) and tmap.has_extra(extra, *to):
                 best = c if best is None else min(best, c)
         if best is None and uclass.name not in terr.native_to:
-            return None                    # klasa tu nie wejdzie
-        if blocked is not None and to != goal and blocked(*to):
-            return None                    # np. cudze terytorium przy pokoju
+            if not (to in cities and native_near(to)):
+                return None                # klasa tu nie wejdzie
+            best = max(1, terr.movement_cost) * single
         if best is None:
             best = max(1, terr.movement_cost) * single
         return min(best, full)
 
     return cost
+
+
+def city_tiles(save: "Save") -> set[tuple[int, int]]:
+    """Kafle wszystkich miast na mapie - dzialaja jak przystanie."""
+    out = set()
+    for sec in save._sections.values():
+        tbl = sec.table("c") if sec else None
+        for r in (tbl.dicts() if tbl else []):
+            out.add((int(r.get("x") or 0), int(r.get("y") or 0)))
+    return out
 
 
 def _step(turns: int, used: int, full: int, cost: int) -> tuple[int, int]:
@@ -447,7 +475,7 @@ def _step(turns: int, used: int, full: int, cost: int) -> tuple[int, int]:
 
 def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
                 start: tuple[int, int], goal: tuple[int, int],
-                max_nodes: int = 60000, blocked=None) -> int | None:
+                max_nodes: int = 60000, blocked=None, cities=None) -> int | None:
     """Ile tur marszu z A do B - po koszcie ruchu, nie po odleglosci.
 
     Zwraca liczbe pelnych tur do przebycia (0 = dojdzie jeszcze w tej turze)
@@ -456,7 +484,7 @@ def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
     import heapq
 
     full = max(1, ut.move_rate) * max(1, rs.move_fragments)
-    cost_of = _enter_cost_fn(rs, tmap, ut, full, blocked, goal)
+    cost_of = _enter_cost_fn(rs, tmap, ut, full, blocked, goal, geom, cities)
 
     best: dict[tuple[int, int], tuple[int, int]] = {start: (0, 0)}
     pq = [(0, 0, start)]
@@ -481,7 +509,7 @@ def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
 
 def reach_within(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
                  start: tuple[int, int], max_turns: int = 2,
-                 blocked=None) -> dict[tuple[int, int], int]:
+                 blocked=None, cities=None) -> dict[tuple[int, int], int]:
     """Wszystkie kafle osiagalne w zadanej liczbie tur, z liczba tur.
 
     Odwrotna perspektywa do `march_turns`: nie "ile tur do celu", tylko
@@ -491,7 +519,7 @@ def reach_within(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
     import heapq
 
     full = max(1, ut.move_rate) * max(1, rs.move_fragments)
-    cost_of = _enter_cost_fn(rs, tmap, ut, full, blocked)
+    cost_of = _enter_cost_fn(rs, tmap, ut, full, blocked, None, geom, cities)
 
     best: dict[tuple[int, int], tuple[int, int]] = {start: (0, 0)}
     pq = [(0, 0, start)]
