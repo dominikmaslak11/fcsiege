@@ -830,6 +830,10 @@ class Intel:
 
         # --- cele
         tmap = TerrainMap(s)
+        # przy pokoju wojsko NIE wejdzie na cudze terytorium (movement.c: MR_PEACE),
+        # wiec czasy marszu podajemy w dwoch wariantach
+        stany = {slot: (s.me.diplomacy.get(slot, "?") if s.me else "?")
+                 for slot in slots}
         cele = []
         for slot, nation in slots.items():
             sec = s._sections.get(slot)
@@ -848,6 +852,7 @@ class Intel:
                 w_zasiegu = 0
                 najblizej = None
                 marsz = None
+                marsz_pokoj = None
                 for u, ut in mine_units:
                     d = self.geom.real_distance((x, y), (u.x, u.y))
                     najblizej = d if najblizej is None else min(najblizej, d)
@@ -855,6 +860,16 @@ class Intel:
                         continue          # zbyt daleko, zeby liczyc sciezke
                     t_marsz = march_turns(rs, tmap, self.geom, ut,
                                           (u.x, u.y), (x, y), max_nodes=8000)
+                    if t_marsz is not None and stany.get(slot) == "Peace":
+                        cudze = slot
+                        blok = (lambda bx, by, owner=cudze:
+                                tmap.owner(bx, by) == owner)
+                        t_pokoj = march_turns(rs, tmap, self.geom, ut,
+                                              (u.x, u.y), (x, y),
+                                              max_nodes=8000, blocked=blok)
+                        marsz_pokoj = (t_pokoj if marsz_pokoj is None
+                                       else min(marsz_pokoj, t_pokoj)) \
+                            if t_pokoj is not None else marsz_pokoj
                     if t_marsz is None:
                         continue
                     marsz = t_marsz if marsz is None else min(marsz, t_marsz)
@@ -874,6 +889,9 @@ class Intel:
                     "moich_w_zasiegu": w_zasiegu,
                     "najblizszy_dystans": najblizej,
                     "tur_marszu": marsz,
+                    "stan_dyplomatyczny": stany.get(slot, "?"),
+                    **({"tur_marszu_bez_wypowiedzenia_wojny": marsz_pokoj}
+                       if stany.get(slot) == "Peace" else {}),
                 })
         cele.sort(key=lambda c: (c["obroncow"],
                                  99 if c["tur_marszu"] is None else c["tur_marszu"]))
@@ -955,6 +973,12 @@ class Intel:
         osiagalne = [c for c in cele if c["moich_w_zasiegu"] > 0]
         return {
             "cel_wojny": sorted(slots.values()),
+            "stany_dyplomatyczne": {n: stany[sl] for sl, n in slots.items()},
+            **({"uwaga_pokoj":
+                "z częścią tych nacji masz POKÓJ — wojsko nie wejdzie na ich "
+                "terytorium, dopóki nie wypowiesz wojny (movement.c: MR_PEACE). "
+                "Podane tury marszu zakładają, że wojna już trwa."}
+               if any(v == "Peace" for v in stany.values()) else {}),
             "tury_zasiegu": tury,
             "moje_jednostki_bojowe": len(mine_units),
             "cele": cele,
