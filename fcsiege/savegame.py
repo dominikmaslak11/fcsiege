@@ -915,6 +915,10 @@ class Intel:
                     "handel": t.int("trade"),
                     "irygacja_daje": t.int("irrigation_food_incr"),
                     "irygacja_tur": t.int("irrigation_time"),
+                    # uprawa i zalesienie sa dostepne dla zwyklych robotnikow,
+                    # przemiana terenu wymaga jednostki z flaga Transform
+                    "uprawa_w": clean_name(t.str("cultivate_result")),
+                    "uprawa_tur": t.int("cultivate_time"),
                     "przemiana_w": clean_name(t.str("transform_result")),
                     "przemiana_tur": t.int("transform_time"),
                 }
@@ -924,6 +928,26 @@ class Intel:
         mine_blds: set[str] = set()
         for r in rows:
             mine_blds |= set(s._bits(r.get("improvements")))
+
+        # Kto moze wykonac dana prace. Prace polowe (irygacja, uprawa) robi
+        # kazda jednostka z flaga Settlers; PRZEMIANE terenu tylko jednostka
+        # z flaga Transform - w sandboksie sa to wylacznie Engineers. Bez tego
+        # rozroznienia narzedzie doradzaloby prace, ktorych nie ma czym zrobic.
+        def kto_umie(flaga: str) -> dict:
+            umieja = [u for u in rs.units.values() if flaga in u.flags]
+            mam = [u.name for u in umieja
+                   if all(t in techs for t in u.req_techs())]
+            posiadane = {u.type for u in s.units_of(s.me.slot)}
+            return {
+                "jednostki": sorted(u.name for u in umieja),
+                "moge_budowac": sorted(mam),
+                "mam_w_grze": sorted(set(mam) & posiadane),
+                "dostepne": bool(set(mam) & posiadane) or bool(mam),
+                "brakuje_technologii": sorted(
+                    {t for u in umieja for t in u.req_techs() if t not in techs}),
+            }
+
+        prace = {"polowe": kto_umie("Settlers"), "przemiana": kto_umie("Transform")}
 
         base, steps = 0, []
         for eff in rs.effects_by_type.get("Unit_Upkeep_Free_Per_City", []):
@@ -989,7 +1013,7 @@ class Intel:
                     if outs == ["Food"] and bl and bl[0] in blds:
                         port_bonus += eff.value
 
-            kafle, zysk_irygacja, zysk_przemiana, praca = [], 0, 0, 0
+            kafle, zysk_dostepny, zysk_zablokowany, praca = [], 0, 0, 0
             for nb in obszar:
                 nm = tmap.terrain(*nb)
                 if nm is None or nm not in plony:
@@ -1015,23 +1039,67 @@ class Intel:
                     "zywnosc_teraz": teraz + (p["irygacja_daje"] if ma_irygacje else 0),
                     "irygowany": ma_irygacje,
                 }
-                if mozliwa_irygacja:
-                    wpis["irygacja_da"] = p["irygacja_daje"]
-                    wpis["irygacja_tur_pracy"] = p["irygacja_tur"]
-                    zysk_irygacja += p["irygacja_daje"]
-                    praca += p["irygacja_tur"]
-                if po_przemianie is not None and po_przemianie > wpis["zywnosc_teraz"]:
-                    wpis["przemiana_w"] = cel
-                    wpis["przemiana_da"] = po_przemianie - wpis["zywnosc_teraz"]
-                    wpis["przemiana_tur_pracy"] = p["przemiana_tur"]
-                    zysk_przemiana += po_przemianie - wpis["zywnosc_teraz"]
+
+                # wszystkie realne drogi do wiekszego plonu z tego kafla
+                opcje = []
+                if p["irygacja_daje"] > 0 and not ma_irygacje:
+                    opcje.append({
+                        "praca": "irygacja",
+                        "daje": p["irygacja_daje"],
+                        "tur_pracy": p["irygacja_tur"],
+                        "wymaga": "polowe",
+                    })
+                cel = p["uprawa_w"]
+                if cel and cel in plony and cel.lower() not in ("no", "none"):
+                    po = plony[cel]
+                    zysk = (po["zywnosc"] + po["irygacja_daje"]) - wpis["zywnosc_teraz"]
+                    if zysk > 0:
+                        opcje.append({
+                            "praca": f"uprawa w {cel}" + (
+                                " i irygacja" if po["irygacja_daje"] else ""),
+                            "daje": zysk,
+                            "tur_pracy": p["uprawa_tur"] + (
+                                po["irygacja_tur"] if po["irygacja_daje"] else 0),
+                            "wymaga": "polowe",
+                        })
+                cel = p["przemiana_w"]
+                if cel and cel in plony and cel.lower() not in ("no", "none"):
+                    po = plony[cel]
+                    zysk = (po["zywnosc"] + po["irygacja_daje"]) - wpis["zywnosc_teraz"]
+                    if zysk > 0:
+                        opcje.append({
+                            "praca": f"przemiana w {cel}" + (
+                                " i irygacja" if po["irygacja_daje"] else ""),
+                            "daje": zysk,
+                            "tur_pracy": p["przemiana_tur"] + (
+                                po["irygacja_tur"] if po["irygacja_daje"] else 0),
+                            "wymaga": "przemiana",
+                        })
+                for o in opcje:
+                    o["dostepne_teraz"] = prace[o["wymaga"]]["dostepne"]
+                    o["czym"] = (prace[o["wymaga"]]["mam_w_grze"]
+                                 or prace[o["wymaga"]]["moge_budowac"] or [])
+                    if not o["dostepne_teraz"]:
+                        o["brakuje"] = prace[o["wymaga"]]["brakuje_technologii"]
+                    o["tur_na_zywnosc"] = round(o["tur_pracy"] / o["daje"], 1)
+                mozliwe = [o for o in opcje if o["dostepne_teraz"]]
+                if mozliwe:
+                    naj = min(mozliwe, key=lambda o: o["tur_na_zywnosc"])
+                    wpis["najlepsza_praca"] = naj
+                    zysk_dostepny += naj["daje"]
+                    praca += naj["tur_pracy"]
+                if opcje:
+                    wpis["opcje"] = opcje
+                zablokowane = [o for o in opcje if not o["dostepne_teraz"]]
+                if zablokowane:
+                    zysk_zablokowany += max(o["daje"] for o in zablokowane)
                 kafle.append(wpis)
             # obywatele obsadzaja najlepsze kafle, po jednym na glowe
             najlepsze = sorted(kafle, key=lambda k: -k["zywnosc_teraz"])[:size]
             centrum = plony.get(tmap.terrain(x, y), {}).get("zywnosc", 1)
             zywnosc_teraz = sum(k["zywnosc_teraz"] for k in najlepsze) + max(1, centrum)
-            kafle.sort(key=lambda k: -(k.get("przemiana_da", 0)
-                                       + k.get("irygacja_da", 0)))
+            kafle.sort(key=lambda k: (k.get("najlepsza_praca") or {}).get(
+                "tur_na_zywnosc", 1e9))
 
             if not unlim and cap and size >= cap:
                 powod = f"limit wielkości {cap} — potrzebna kanalizacja"
@@ -1054,13 +1122,36 @@ class Intel:
                 "zywnosc_z_obrabianych_kafli": zywnosc_teraz,
                 "zjadaja_obywatele": size * 2,
                 "powod": powod,
-                "zysk_z_irygacji": zysk_irygacja,
-                "zysk_z_przemiany": zysk_przemiana,
-                "tur_pracy_na_irygacje": praca,
+                "zysk_dostepny_teraz": zysk_dostepny,
+                "tur_pracy_lacznie": praca,
+                "zysk_po_zdobyciu_technologii": zysk_zablokowany,
                 "kafle": kafle[:limit],
             })
-        out.sort(key=lambda c: -(c["zysk_z_irygacji"] + c["zysk_z_przemiany"]))
+        out.sort(key=lambda c: -c["zysk_dostepny_teraz"])
+
+        # zbiorczy plan dla robotnikow: wszystkie prace w panstwie, od
+        # najtanszej za jednostke zywnosci
+        plan = []
+        for c in out:
+            for k in c["kafle"]:
+                naj = k.get("najlepsza_praca")
+                if not naj:
+                    continue
+                plan.append({
+                    "miasto": c["miasto"], "kafel": k["kafel"],
+                    "teren": k["teren"], "praca": naj["praca"],
+                    "daje_zywnosci": naj["daje"], "tur_pracy": naj["tur_pracy"],
+                    "tur_na_zywnosc": naj["tur_na_zywnosc"],
+                    "czym": naj["czym"],
+                })
+        plan.sort(key=lambda j: j["tur_na_zywnosc"])
+
         return {
+            "kto_moze_pracowac": prace,
+            "plan_robot": plan[:60],
+            "prac_lacznie": len(plan),
+            "zywnosci_do_zyskania": sum(j["daje_zywnosci"] for j in plan),
+            "tur_pracy_lacznie": sum(j["tur_pracy"] for j in plan),
             "miasta": out,
             "jak_czytac": (
                 "irygacja działa od ręki i jest tania; przemiana terenu daje "
@@ -1388,7 +1479,7 @@ class Intel:
                         f"łącznie irygacja da +{c['zysk_z_irygacji']}, "
                         f"przemiana terenu +{c['zysk_z_przemiany']}")
             alerty.append({
-                "waga": "warte uwagi", "tur_do_szkody": None,
+                "waga": "pilne", "tur_do_szkody": None,
                 "miasto": c["miasto"], "rodzaj": "wzrost zatrzymany przez jałową ziemię",
                 "co_sie_dzieje": (f"obrabiane kafle dają {c['zywnosc_z_obrabianych_kafli']} "
                                   f"żywności, a {c['rozmiar']} obywateli zjada "
@@ -1396,7 +1487,47 @@ class Intel:
                 "rada": rada,
             })
 
-        kolejnosc = {"krytyczne": 0, "pilne": 1, "warte uwagi": 2}
+        # --- prace terenowe: dla KAZDEGO miasta, ktore ma co poprawiac
+        plan = wzrost.get("plan_robot", [])
+        umie = wzrost.get("kto_moze_pracowac", {})
+        po_miastach = collections.defaultdict(list)
+        for job in plan:
+            po_miastach[job["miasto"]].append(job)
+        for nazwa, joby in po_miastach.items():
+            zysk = sum(j["daje_zywnosci"] for j in joby)
+            tur = sum(j["tur_pracy"] for j in joby)
+            naj = joby[0]
+            alerty.append({
+                "waga": "informacja", "tur_do_szkody": None,
+                "miasto": nazwa, "rodzaj": "prace terenowe do wykonania",
+                "co_sie_dzieje": (f"{len(joby)} kafli do poprawy, razem "
+                                  f"+{zysk} żywności za {tur} tur pracy"),
+                "rada": (f"zacznij od: {naj['praca']} na kaflu {naj['kafel']} "
+                         f"({naj['teren']}) — +{naj['daje_zywnosci']} za "
+                         f"{naj['tur_pracy']} tur, czym: "
+                         f"{', '.join(naj['czym']) or 'brak jednostki'}"),
+            })
+        if plan:
+            blok = umie.get("przemiana", {})
+            alerty.append({
+                "waga": "informacja", "tur_do_szkody": None,
+                "miasto": "— całe państwo",
+                "rodzaj": "plan robót dla robotników",
+                "co_sie_dzieje": (
+                    f"{wzrost.get('prac_lacznie', 0)} prac w "
+                    f"{len(po_miastach)} miastach: razem "
+                    f"+{wzrost.get('zywnosci_do_zyskania', 0)} żywności za "
+                    f"{wzrost.get('tur_pracy_lacznie', 0)} tur pracy"),
+                "rada": (
+                    "przemiana terenu wymaga jednostki z flagą Transform "
+                    f"({', '.join(blok.get('jednostki', [])) or '—'}), a brakuje "
+                    f"do niej: {', '.join(blok.get('brakuje_technologii', [])) or '—'}. "
+                    "Do tego czasu robotnicy mogą irygować i uprawiać."
+                    if not blok.get("dostepne") else
+                    "masz czym wykonać wszystkie prace, łącznie z przemianą terenu"),
+            })
+
+        kolejnosc = {"krytyczne": 0, "pilne": 1, "warte uwagi": 2, "informacja": 3}
         alerty.sort(key=lambda a: (kolejnosc.get(a["waga"], 9),
                                    a["tur_do_szkody"]
                                    if a["tur_do_szkody"] is not None else 999))

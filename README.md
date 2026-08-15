@@ -465,6 +465,16 @@ z zewnątrz wyglądają tak samo: limit wielkości, deficyt utrzymania na żywno
 i jałowa ziemia. Przy ziemi podaje dla każdego kafla, ile da irygacja, a ile
 przemiana terenu, wraz z liczbą tur pracy robotnika.
 
+Rozróżnia też, **czym** da się daną pracę wykonać. Irygację i uprawę
+(`cultivate`) robi każda jednostka z flagą `Settlers`, ale **przemianę terenu
+tylko jednostka z flagą `Transform`** — w `sandbox` są to wyłącznie Engineers,
+a te wymagają technologii Explosives. Bez tego rozróżnienia narzędzie
+doradzało prace, których nie ma czym wykonać. Każda opcja niesie więc
+`dostepne_teraz` i listę brakujących technologii.
+
+`plan_robot` zbiera wszystkie prace w państwie i szereguje je po **turach pracy
+za jednostkę żywności** — to jest lista zadań dla robotników.
+
 Model liczy obszar o promieniu 2 (a nie samo sąsiedztwo), obsadza tyle kafli,
 ilu miasto ma obywateli, i uwzględnia **surowce na kaflach** oraz **port**
 (+1 żywności z kafla morskiego). Bez tych dwóch składników narzędzie oznaczało

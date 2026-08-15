@@ -14,7 +14,9 @@ from . import i18n
 from .headless import HeadlessBridge
 from .watcher import SaveWatcher, newest_save, summarize
 
-WAGI = {"krytyczne": "\033[31m", "pilne": "\033[33m", "warte uwagi": "\033[36m"}
+WAGI = {"krytyczne": "\033[31m", "pilne": "\033[33m",
+        "warte uwagi": "\033[36m", "informacja": "\033[90m"}
+KOLEJNOSC = ("krytyczne", "pilne", "warte uwagi", "informacja")
 RESET = "\033[0m"
 
 
@@ -33,15 +35,26 @@ def _print(payload: dict, kolor: bool) -> None:
     if not alerty:
         print("  nic pilnego")
         return
+    # informacyjne grupujemy, zeby nie zagluszaly pilnych
+    wagi = {}
     for a in alerty:
-        waga = a.get("waga", a.get("severity", ""))
-        tur = a.get("tur_do_szkody", a.get("turns_to_harm"))
+        wagi.setdefault(a.get("waga", a.get("severity", "")), []).append(a)
+    for waga in KOLEJNOSC:
+        grupa = wagi.get(waga, [])
+        if not grupa:
+            continue
         pref = WAGI.get(waga, "") if kolor else ""
         suf = RESET if kolor and pref else ""
-        czas = f" ({tur} tur)" if tur is not None else ""
-        print(f"  {pref}[{waga}]{suf} {a.get('miasto', a.get('city', ''))}"
-              f"{czas}: {a.get('rodzaj', a.get('kind', ''))}")
-        print(f"      → {a.get('rada', a.get('advice', ''))}")
+        if waga == "informacja" and len(grupa) > 4:
+            print(f"  {pref}[{waga}]{suf} {len(grupa)} wpisów "
+                  f"(pełna lista: narzędzie `alerty`)")
+            grupa = grupa[:3]
+        for a in grupa:
+            tur = a.get("tur_do_szkody", a.get("turns_to_harm"))
+            czas = f" ({tur} tur)" if tur is not None else ""
+            print(f"  {pref}[{waga}]{suf} {a.get('miasto', a.get('city', ''))}"
+                  f"{czas}: {a.get('rodzaj', a.get('kind', ''))}")
+            print(f"      → {a.get('rada', a.get('advice', ''))}")
 
 
 def main(argv: list[str] | None = None) -> int:

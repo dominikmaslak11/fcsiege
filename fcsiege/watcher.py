@@ -118,7 +118,7 @@ def summarize(bridge, path: str, lang: str = "pl") -> dict:
         return {**out, "blad": f"{type(exc).__name__}: {exc}"}
     try:
         alerty = dispatch(bridge, "alerty", {})
-        out["alerty"] = alerty.get("alerty", alerty.get("alerts", []))[:12]
+        out["alerty"] = alerty.get("alerty", alerty.get("alerts", []))[:40]
         out["podsumowanie"] = {k: alerty.get(k) for k in
                                ("alertow", "krytycznych", "pilnych",
                                 "alerts_count", "critical", "urgent")
