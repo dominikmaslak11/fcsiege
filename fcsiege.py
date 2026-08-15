@@ -28,7 +28,11 @@ def main() -> int:
         return api_main(argv[1:])
 
     from fcsiege.app import main as gui_main
-    return gui_main(control="--control" in argv)
+    lang = None
+    for a in argv:
+        if a.startswith(("--lang=", "--jezyk=")):
+            lang = a.split("=", 1)[1]
+    return gui_main(control="--control" in argv, lang=lang)
 
 
 if __name__ == "__main__":

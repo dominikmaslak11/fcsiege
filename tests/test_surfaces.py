@@ -359,6 +359,18 @@ def test_savegame():
           bool(front.get("fronty"))
           and "moje_najblizsze_miasta" in front["fronty"][0])
 
+    eras = dispatch(bridge, "epoki", {"prog": 8})
+    check("wyznacza epoki z technologii przełomowych",
+          len(eras["epoki"]) >= 4 and eras["epoka"], eras["epoka"])
+    check("progi epok rosną", all(
+        eras["epoki"][i]["prog"] <= eras["epoki"][i + 1]["prog"]
+        for i in range(len(eras["epoki"]) - 1)))
+    check("mówi, co dochodzi na progu",
+          set(eras["nowe_na_tym_progu"]) == {"jednostki", "budynki", "cuda"})
+    check("wskazuje następną epokę i jej technologię",
+          eras.get("nastepna_epoka", {}).get("prog", 0) > 8,
+          str(eras.get("nastepna_epoka")))
+
     trade = dispatch(bridge, "szlaki_handlowe", {"limit": 10})
     check("czyta tabelę typów tras z reguł",
           {"IN", "INIC", "National"} <= set(trade.get("zasady", {})),

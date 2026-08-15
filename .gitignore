@@ -6,3 +6,6 @@ venv/
 .pytest_cache/
 .idea/
 .vscode/
+
+# osobiste analizy partii — nie należą do repozytorium
+plan_produkcji.txt

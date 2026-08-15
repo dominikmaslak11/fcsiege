@@ -20,7 +20,9 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .aitools import TOOL_SPECS, dispatch
+from . import i18n
+from .i18n import _
+from .aitools import TOOL_SPECS, dispatch, localized_specs
 from .control import ControlClient
 from .headless import HeadlessBridge
 
@@ -63,6 +65,7 @@ class Engine:
 
 
 def openapi_schema() -> dict:
+    specs = localized_specs()
     paths = {
         "/narzedzie/" + spec["name"]: {
             "post": {
@@ -74,23 +77,29 @@ def openapi_schema() -> dict:
                     "content": {"application/json": {"schema": spec["input_schema"]}},
                 },
                 "responses": {"200": {
-                    "description": "wynik narzędzia",
+                    "description": _("wynik narzędzia"),
                     "content": {"application/json": {"schema": {"type": "object"}}},
                 }},
             }
-        } for spec in TOOL_SPECS
+        } for spec in specs
     }
-    paths["/stan"] = {"get": {"summary": "Obecny scenariusz",
+    en = i18n.language() == "en"
+    paths["/stan"] = {"get": {"summary": "Current scenario" if en
+                                         else "Obecny scenariusz",
                               "operationId": "stan",
                               "responses": {"200": {"description": "stan"}}}}
-    paths["/zdrowie"] = {"get": {"summary": "Kontrola życia",
+    paths["/zdrowie"] = {"get": {"summary": "Health check" if en
+                                            else "Kontrola życia",
                                  "operationId": "zdrowie",
                                  "responses": {"200": {"description": "ok"}}}}
     return {
         "openapi": "3.1.0",
         "info": {"title": "FCSiege API", "version": "1.0.0",
-                 "description": "Kalkulator walki o miasto dla Freeciva. "
-                                "Liczy wprost z plików .ruleset."},
+                 "description": ("City-assault calculator for Freeciv. "
+                                 "Computes straight from the .ruleset files.")
+                                if en else
+                                ("Kalkulator walki o miasto dla Freeciva. "
+                                 "Liczy wprost z plików .ruleset.")},
         "servers": [{"url": "/"}],
         "paths": paths,
     }
@@ -121,6 +130,7 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------ pomocnicze
 
     def _send(self, code: int, payload: dict) -> None:
+        payload = i18n.translate(payload)
         body = json.dumps(payload, ensure_ascii=False, default=str,
                           indent=2).encode("utf-8")
         self.send_response(code)
@@ -129,6 +139,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+
+    def _set_language(self) -> str:
+        """Jezyk zadania: ?lang=en, potem naglowek Accept-Language."""
+        query = self.path.split("?", 1)[1] if "?" in self.path else ""
+        want = None
+        for part in query.split("&"):
+            if part.startswith(("lang=", "jezyk=")):
+                want = part.split("=", 1)[1]
+        return i18n.set_language(
+            i18n.normalize(want or self.headers.get("Accept-Language")))
 
     def _authorized(self) -> bool:
         if not self.token:
@@ -141,45 +161,47 @@ class Handler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         if length > MAX_BODY:
-            raise ValueError("ciało żądania jest za duże")
+            raise ValueError(_("ciało żądania jest za duże"))
         raw = self.rfile.read(length)
         if not raw.strip():
             return {}
         data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict):
-            raise ValueError("oczekiwano obiektu JSON")
+            raise ValueError(_("oczekiwano obiektu JSON"))
         return data
 
     # ---------------------------------------------------------------- trasy
 
     def do_GET(self) -> None:  # noqa: N802 - podpis z biblioteki
+        self._set_language()
         if not self._authorized():
-            return self._send(401, {"blad": "brak lub zły token"})
+            return self._send(401, {"blad": _("brak lub zły token")})
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if path == "/":
             return self._send(200, INDEX)
-        if path == "/zdrowie":
+        if path in ("/zdrowie", "/health"):
             return self._send(200, {"status": "ok", "zrodlo": self.engine.source()})
-        if path == "/narzedzia":
-            return self._send(200, {"narzedzia": TOOL_SPECS})
+        if path in ("/narzedzia", "/tools"):
+            return self._send(200, {"narzedzia": localized_specs()})
         if path == "/openapi.json":
             return self._send(200, openapi_schema())
-        if path == "/stan":
+        if path in ("/stan", "/state"):
             return self._call("pokaz_stan", {})
-        return self._send(404, {"blad": f"nie ma ścieżki {path}"})
+        return self._send(404, {"blad": f"{_('nie ma ścieżki')} {path}"})
 
     def do_POST(self) -> None:  # noqa: N802
+        self._set_language()
         if not self._authorized():
-            return self._send(401, {"blad": "brak lub zły token"})
+            return self._send(401, {"blad": _("brak lub zły token")})
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         try:
             body = self._body()
         except ValueError as exc:
             return self._send(400, {"blad": str(exc)})
         except json.JSONDecodeError as exc:
-            return self._send(400, {"blad": f"nieprawidłowy JSON: {exc}"})
+            return self._send(400, {"blad": f"{_('nieprawidłowy JSON')}: {exc}"})
 
-        if path == "/policz":
+        if path in ("/policz", "/compute"):
             scenario = body.get("scenariusz")
             if isinstance(scenario, dict) and scenario:
                 applied = self.engine.call("ustaw_scenariusz", scenario)
@@ -190,14 +212,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, result)
             return self._call("policz", {})
 
-        if path.startswith("/narzedzie/"):
-            name = path[len("/narzedzie/"):]
-            if name not in {t["name"] for t in TOOL_SPECS}:
-                return self._send(404, {"blad": f"nie ma narzędzia {name}",
-                                        "dostepne": [t["name"] for t in TOOL_SPECS]})
+        if path.startswith(("/narzedzie/", "/tool/")):
+            name = path.split("/", 2)[2]
+            known = {t["name"] for t in TOOL_SPECS}
+            if i18n.canonical_tool(name) not in known:
+                return self._send(404, {
+                    "blad": f"{_('nie ma narzędzia')} {name}",
+                    "dostepne": sorted(i18n.tool_name(n) for n in known)})
             return self._call(name, body)
 
-        return self._send(404, {"blad": f"nie ma ścieżki {path}"})
+        return self._send(404, {"blad": f"{_('nie ma ścieżki')} {path}"})
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(204)

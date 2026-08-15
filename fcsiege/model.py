@@ -165,6 +165,7 @@ class Extra:
 class Building:
     id: str
     name: str
+    label: str = ""            # nazwa dla gracza, gdy rule_name jest inna
     build_cost: int = 0
     upkeep: int = 0
     genus: str = "Improvement"
@@ -196,6 +197,20 @@ class CombatRules:
     low_firepower_combat_bonus: int = 1
     low_firepower_nonnat_bombard: int = 1
     killstack: bool = True
+
+
+def display_name_of(sec) -> str:
+    return clean_name(sec.str("name"))
+
+
+def rule_name_of(sec) -> str:
+    """Nazwa, ktorej uzywaja efekty i zapisy gry.
+
+    Freeciv rozroznia `name` (tlumaczona, dla gracza) i `rule_name` (wewnetrzna).
+    Wymagania efektow oraz zapisy odwoluja sie do tej drugiej, wiec to ona musi
+    byc kluczem - inaczej np. efekty Colosseum nie dopna sie do Amphitheater.
+    """
+    return clean_name(sec.str("rule_name") or sec.str("name"))
 
 
 class Ruleset:
@@ -238,7 +253,7 @@ class Ruleset:
         if reg is None:
             return
         for sec in reg.prefixed("government_"):
-            name = clean_name(sec.str("name"))
+            name = rule_name_of(sec)
             if name:
                 self.governments.append(name)
 
@@ -274,7 +289,7 @@ class Ruleset:
         for sec in reg.prefixed("unitclass_"):
             uc = UnitClass(
                 id=sec.name,
-                name=clean_name(sec.str("name")),
+                name=rule_name_of(sec),
                 flags=set(str(f) for f in sec.list("flags")),
                 min_speed=sec.int("min_speed"),
             )
@@ -292,7 +307,7 @@ class Ruleset:
                     ))
             ut = UnitType(
                 id=sec.name,
-                name=clean_name(sec.str("name")),
+                name=rule_name_of(sec),
                 uclass_id=clean_name(sec.str("class")),
                 attack=sec.int("attack"),
                 defense=sec.int("defense"),
@@ -323,7 +338,7 @@ class Ruleset:
         for sec in reg.prefixed("terrain_"):
             t = Terrain(
                 id=sec.name,
-                name=clean_name(sec.str("name")),
+                name=rule_name_of(sec),
                 defense_bonus=sec.int("defense_bonus"),
                 movement_cost=sec.int("movement_cost", 1),
                 tclass=clean_name(sec.str("class", "Land")),
@@ -336,7 +351,7 @@ class Ruleset:
         for sec in reg.prefixed("extra_"):
             e = Extra(
                 id=sec.name,
-                name=clean_name(sec.str("name")),
+                name=rule_name_of(sec),
                 defense_bonus=sec.int("defense_bonus"),
                 flags=set(str(f) for f in sec.list("flags")),
                 causes=set(str(f) for f in sec.list("causes")),
@@ -350,7 +365,8 @@ class Ruleset:
         for sec in reg.prefixed("building_"):
             b = Building(
                 id=sec.name,
-                name=clean_name(sec.str("name")),
+                name=rule_name_of(sec),
+                label=display_name_of(sec),
                 build_cost=sec.int("build_cost"),
                 upkeep=sec.int("upkeep"),
                 genus=clean_name(sec.str("genus", "Improvement")),
@@ -365,7 +381,7 @@ class Ruleset:
         for sec in reg.prefixed("advance_"):
             t = Tech(
                 id=sec.name,
-                name=clean_name(sec.str("name")),
+                name=rule_name_of(sec),
                 req1=clean_name(sec.str("req1", "None")),
                 req2=clean_name(sec.str("req2", "None")),
                 root_req=clean_name(sec.str("root_req", "None")),
@@ -459,6 +475,52 @@ class Ruleset:
             return 0
         return max(self.tech_depth(t) for t in techs)
 
+    def eras(self) -> list[dict]:
+        """Epoki dostepne w tym zestawie regul, z progiem drzewa technologii."""
+        out = []
+        for name, tech in ERA_LANDMARKS:
+            if not tech:
+                out.append({"nazwa": name, "technologia": None, "prog": 0})
+                continue
+            if tech in self.techs:
+                out.append({"nazwa": name, "technologia": tech,
+                            "prog": self.tech_depth(tech)})
+        out.sort(key=lambda e: e["prog"])
+        merged: list[dict] = []
+        for e in out:
+            if merged and merged[-1]["prog"] == e["prog"]:
+                merged[-1] = e
+            else:
+                merged.append(e)
+        return merged
+
+    def era_at(self, depth: int) -> dict:
+        """Epoka odpowiadajaca danemu progowi drzewa technologii."""
+        current = {"nazwa": "Epoka kamienia", "technologia": None, "prog": 0}
+        for e in self.eras():
+            if e["prog"] <= depth:
+                current = e
+            else:
+                break
+        return current
+
+    def unlocked_at(self, depth: int) -> dict:
+        """Co dochodzi dokladnie na tym progu (a nie wczesniej)."""
+        known = self.techs_up_to(depth)
+        before = self.techs_up_to(max(0, depth - 1))
+
+        def fresh(reqs: list[str]) -> bool:
+            return all(t in known for t in reqs) and not all(t in before for t in reqs)
+
+        units = [u.name for u in self.units.values()
+                 if fresh(u.req_techs()) and (u.attack or u.defense)]
+        blds = [b.name for b in self.buildings.values() if fresh(b.req_techs())]
+        return {
+            "jednostki": sorted(units),
+            "budynki": sorted(b for b in blds if not self.buildings[b].is_wonder),
+            "cuda": sorted(b for b in blds if self.buildings[b].is_wonder),
+        }
+
     def units_available(self, known_techs: set[str] | None) -> list[UnitType]:
         """Jednostki mozliwe do zbudowania przy danym stanie wiedzy."""
         out = []
@@ -507,6 +569,25 @@ class Ruleset:
 
     def land_terrains(self) -> list[Terrain]:
         return [t for t in self.terrains.values() if t.is_land]
+
+
+# Epoki nie sa polem w plikach regul - Freeciv ich nie definiuje. Wyznaczamy je
+# po technologiach przelomowych, tych samych, ktorymi podrecznik gry dzieli
+# katalog jednostek. Zestawy regul, w ktorych danej technologii nie ma, po
+# prostu pomijaja ta epoke.
+ERA_LANDMARKS: list[tuple[str, str]] = [
+    ("Epoka kamienia", ""),
+    ("Epoka brązu", "Bronze Working"),
+    ("Epoka żelaza", "Iron Working"),
+    ("Średniowiecze", "Feudalism"),
+    ("Wiek odkryć", "Navigation"),
+    ("Wiek prochu", "Gunpowder"),
+    ("Rewolucja przemysłowa", "Industrialization"),
+    ("Wiek elektryczności", "Electricity"),
+    ("Czasy nowoczesne", "Automobile"),
+    ("Wiek informacji", "Computers"),
+    ("Era kosmiczna", "Space Flight"),
+]
 
 
 def discover_rulesets(root: str) -> list[str]:

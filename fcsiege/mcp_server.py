@@ -12,6 +12,7 @@ wtedy Claude przestawia kontrolki, ktore uzytkownik ma przed soba.
 from __future__ import annotations
 
 import argparse
+import os
 import asyncio
 import json
 import sys
@@ -21,7 +22,9 @@ from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 
-from .aitools import SYSTEM_PROMPT, TOOL_SPECS, dispatch
+from . import i18n
+from .aitools import (SYSTEM_PROMPT, TOOL_SPECS, dispatch,
+                      localized_specs)
 from .control import ControlClient
 from .headless import HeadlessBridge
 
@@ -85,7 +88,7 @@ def build_server(backend: Backend) -> Server:
         return [types.Tool(name=spec["name"],
                            description=spec["description"],
                            inputSchema=spec["input_schema"])
-                for spec in TOOL_SPECS]
+                for spec in localized_specs()]
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
@@ -132,12 +135,16 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="fcsiege mcp",
         description="Serwer MCP kalkulatora FCSiege (transport stdio).")
+    ap.add_argument("--lang", "--jezyk", choices=list(i18n.LANGS),
+                    default=os.environ.get("FCSIEGE_LANG", "pl"),
+                    help="język nazw narzędzi i odpowiedzi")
     ap.add_argument("--ruleset", default="classic",
                     help="zestaw reguł dla trybu lokalnego (domyślnie classic)")
     ap.add_argument("--attach", choices=["auto", "zawsze", "nigdy"], default="auto",
                     help="czy sterować uruchomionym oknem aplikacji "
                          "(auto: gdy nasłuchuje)")
     args = ap.parse_args(argv)
+    i18n.set_language(i18n.normalize(args.lang))
 
     backend = Backend(args.ruleset, args.attach)
     try:

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QLineEdit,
                                QSizePolicy, QTextBrowser, QVBoxLayout, QWidget)
 
 from . import theme
+from .i18n import _
 from .aiclient import (ChatWorker, Conversation, Credentials,
                        anthropic_cli_present, detect_credentials, forget_key,
                        has_anthropic_profile, save_key)
@@ -32,7 +33,7 @@ class ChatInput(QPlainTextEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setPlaceholderText("Zapytaj o scenariusz… (Enter wysyła, Shift+Enter nowa linia)")
+        self.setPlaceholderText(_("Zapytaj o scenariusz… (Enter wysyła, Shift+Enter nowa linia)"))
         self.setFixedHeight(76)
 
     def keyPressEvent(self, ev: QKeyEvent) -> None:  # noqa: N802
@@ -60,7 +61,7 @@ class ChatPanel(QWidget):
         self.card_auth = self._build_auth_card()
         lay.addWidget(self.card_auth)
 
-        self.card_chat = Card("Asystent")
+        self.card_chat = Card(_("Asystent"))
         body = self.card_chat.body()
 
         self.view = QTextBrowser()
@@ -92,13 +93,13 @@ class ChatPanel(QWidget):
 
         row = QHBoxLayout()
         row.setSpacing(8)
-        self.btn_send = QPushButton("Wyślij")
+        self.btn_send = QPushButton(_("Wyślij"))
         self.btn_send.setObjectName("Primary")
         self.btn_send.clicked.connect(self._on_submit)
-        self.btn_stop = QPushButton("Przerwij")
+        self.btn_stop = QPushButton(_("Przerwij"))
         self.btn_stop.clicked.connect(self._on_stop)
         self.btn_stop.setVisible(False)
-        self.btn_clear = QPushButton("Wyczyść")
+        self.btn_clear = QPushButton(_("Wyczyść"))
         self.btn_clear.clicked.connect(self._on_clear)
         row.addWidget(self.btn_send)
         row.addWidget(self.btn_stop)
@@ -114,7 +115,7 @@ class ChatPanel(QWidget):
     # ---------------------------------------------------------- logowanie
 
     def _build_auth_card(self) -> Card:
-        card = Card("Połączenie z Claude")
+        card = Card(_("Połączenie z Claude"))
         b = card.body()
 
         self.lbl_auth = QLabel("")
@@ -135,7 +136,7 @@ class ChatPanel(QWidget):
         kl.addWidget(self.edit_key)
         krow = QHBoxLayout()
         krow.setSpacing(8)
-        self.btn_save_key = QPushButton("Zapisz klucz")
+        self.btn_save_key = QPushButton(_("Zapisz klucz"))
         self.btn_save_key.setObjectName("Primary")
         self.btn_save_key.clicked.connect(self._on_save_key)
         krow.addWidget(self.btn_save_key)
@@ -143,7 +144,7 @@ class ChatPanel(QWidget):
         kl.addLayout(krow)
         b.addWidget(self.wrap_key)
 
-        self.btn_forget = QPushButton("Odłącz klucz")
+        self.btn_forget = QPushButton(_("Odłącz klucz"))
         self.btn_forget.clicked.connect(self._on_forget)
         b.addWidget(self.btn_forget)
         return card
@@ -189,7 +190,7 @@ class ChatPanel(QWidget):
         save_key(key)
         self.edit_key.clear()
         self._refresh_auth()
-        self._system_line("Klucz zapisany. Możesz zadawać pytania.")
+        self._system_line(_("Klucz zapisany. Możesz zadawać pytania."))
 
     def _on_forget(self) -> None:
         forget_key()
@@ -238,7 +239,7 @@ class ChatPanel(QWidget):
         self._answer_open = False
         self.btn_send.setEnabled(False)
         self.btn_stop.setVisible(True)
-        self.lbl_status.setText("Myślę…")
+        self.lbl_status.setText(_("Myślę…"))
         self._worker.start()
 
     def _open_answer(self) -> None:
@@ -259,7 +260,7 @@ class ChatPanel(QWidget):
 
     def _on_thinking(self, _text: str) -> None:
         if not self._answer_open:
-            self.lbl_status.setText("Myślę…")
+            self.lbl_status.setText(_("Myślę…"))
 
     def _on_tool_started(self, name: str, args: str) -> None:
         short = args if len(args) <= 90 else args[:87] + "…"
@@ -286,7 +287,7 @@ class ChatPanel(QWidget):
     def _on_stop(self) -> None:
         if self._worker is not None:
             self._worker.request_stop()
-            self.lbl_status.setText("Przerywam…")
+            self.lbl_status.setText(_("Przerywam…"))
 
     def _on_clear(self) -> None:
         if self._worker is not None:

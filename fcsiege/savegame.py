@@ -319,7 +319,8 @@ def passability(rs, tmap: TerrainMap, uclass: str):
 
 
 def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
-              target_region: int, reg: dict, max_nodes: int = 200000) -> dict | None:
+              target_region: int, reg: dict, max_nodes: int = 200000,
+              geom: "MapGeometry | None" = None) -> dict | None:
     """Najtansze polaczenie drogowe z kieszeni do wskazanego obszaru.
 
     Koszt kafla to liczba tur pracy potrzebnych, zeby zbudowac tam droge
@@ -353,21 +354,18 @@ def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
         if reg.get((x, y)) == target_region:
             goal = (x, y)
             break
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                if dx == dy == 0:
-                    continue
-                nx, ny = (x + dx) % W, y + dy
-                if not (0 <= ny < H):
-                    continue
-                c = cost(nx, ny)
-                if c is None:
-                    continue
-                nd = d + c
-                if nd < dist.get((nx, ny), 1 << 30):
-                    dist[(nx, ny)] = nd
-                    prev[(nx, ny)] = (x, y)
-                    heapq.heappush(pq, (nd, (nx, ny)))
+        for nx, ny in (geom.neighbours(x, y) if geom is not None else
+                       [((x + dx) % W, y + dy)
+                        for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                        if (dx or dy) and 0 <= y + dy < H]):
+            c = cost(nx, ny)
+            if c is None:
+                continue
+            nd = d + c
+            if nd < dist.get((nx, ny), 1 << 30):
+                dist[(nx, ny)] = nd
+                prev[(nx, ny)] = (x, y)
+                heapq.heappush(pq, (nd, (nx, ny)))
     if goal is None:
         return None
     path = [goal]
@@ -384,11 +382,28 @@ def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
             "przy_8_robotnikach_tur": max(1, -(-total // 8)) if total else 0}
 
 
-def regions(tmap: TerrainMap, passable) -> dict[tuple[int, int], int]:
-    """Spojne obszary przejezdne (8-kierunkowo, mapa zawinieta w poziomie)."""
+def regions(tmap: TerrainMap, passable,
+            geom: "MapGeometry | None" = None) -> dict[tuple[int, int], int]:
+    """Spojne obszary przejezdne, wg prawdziwego sasiedztwa mapy.
+
+    Bez geometrii z zapisu przyjmujemy siatke kwadratowa (8 kierunkow); to
+    zawyza spojnosc na mapach heksowych, dlatego wolamy z geometria.
+    """
     seen: dict[tuple[int, int], int] = {}
     cid = 0
     W, H = tmap.width, tmap.height
+
+    def around(cx, cy):
+        if geom is not None:
+            yield from geom.neighbours(cx, cy)
+            return
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                if dx or dy:
+                    ny = cy + dy
+                    if 0 <= ny < H:
+                        yield (cx + dx) % W, ny
+
     for y in range(H):
         for x in range(len(tmap.rows[y])):
             if (x, y) in seen or not passable(x, y):
@@ -398,14 +413,10 @@ def regions(tmap: TerrainMap, passable) -> dict[tuple[int, int], int]:
             seen[(x, y)] = cid
             while stack:
                 cx, cy = stack.pop()
-                for dx in (-1, 0, 1):
-                    for dy in (-1, 0, 1):
-                        if dx == dy == 0:
-                            continue
-                        nx, ny = (cx + dx) % W, cy + dy
-                        if 0 <= ny < H and (nx, ny) not in seen and passable(nx, ny):
-                            seen[(nx, ny)] = cid
-                            stack.append((nx, ny))
+                for nb in around(cx, cy):
+                    if nb not in seen and passable(*nb):
+                        seen[nb] = cid
+                        stack.append(nb)
     return seen
 
 
@@ -451,7 +462,99 @@ def _known_techs(save: "Save") -> set[str]:
 
 # ------------------------------------------------------------------ wywiad
 
+class MapGeometry:
+    """Geometria mapy z zapisu - potrzebna do liczenia realnych odleglosci.
+
+    Zapis trzyma wspolrzedne NATYWNE (nat_x, nat_y), a Freeciv liczy odleglosc
+    we wspolrzednych MAPOWYCH, po zawinieciu wektora w natywnych. Na mapie
+    iso-hex nie da sie isc po przekatnej NE/SW, wiec odleglosc nie jest zwyklym
+    maksimum. Odwzorowanie jeden do jednego z common/map.c (3.2).
+    """
+
+    def __init__(self, xsize: int = 0, ysize: int = 0, topology: str = "",
+                 wrap: str = ""):
+        self.xsize = xsize or 1
+        self.ysize = ysize or 1
+        t = (topology or "").upper()
+        w = (wrap or "").upper()
+        self.iso = "ISO" in t
+        self.hex = "HEX" in t
+        self.wrapx = "WRAPX" in w
+        self.wrapy = "WRAPY" in w
+
+    @classmethod
+    def from_save(cls, save: "Save") -> "MapGeometry":
+        vals: dict[str, str] = {}
+        st = save.reg.get("settings")
+        tbl = st.table("set") if st else None
+        for row in (tbl.dicts() if tbl else []):
+            vals[str(row.get("name"))] = str(row.get("value"))
+        return cls(int(vals.get("xsize") or 0), int(vals.get("ysize") or 0),
+                   vals.get("topology", ""), vals.get("wrap", ""))
+
+    def to_map(self, nx: int, ny: int) -> tuple[int, int]:
+        """NATIVE_TO_MAP_POS z map.h."""
+        if not self.iso:
+            return nx, ny
+        mx = (ny + (ny & 1)) // 2 + nx
+        return mx, ny - mx + self.xsize
+
+    def real_distance(self, a: tuple[int, int], b: tuple[int, int]) -> int:
+        """Odleglosc jak real_map_distance(); argumenty w natywnych."""
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        if self.wrapx:
+            dx = (dx + self.xsize // 2) % self.xsize - self.xsize // 2
+        if self.wrapy:
+            dy = (dy + self.ysize // 2) % self.ysize - self.ysize // 2
+        x0, y0 = self.to_map(a[0], a[1])
+        x1, y1 = self.to_map(a[0] + dx, a[1] + dy)
+        return self._vector_distance(x1 - x0, y1 - y0)
+
+    def neighbours(self, x: int, y: int):
+        """Kafle faktycznie sasiadujace - na heksie jest ich 6, nie 8."""
+        for dx, dy in self._offsets(y):
+            nx, ny = x + dx, y + dy
+            if self.wrapx:
+                nx %= self.xsize
+            elif not 0 <= nx < self.xsize:
+                continue
+            if self.wrapy:
+                ny %= self.ysize
+            elif not 0 <= ny < self.ysize:
+                continue
+            yield nx, ny
+
+    def _offsets(self, y: int) -> list[tuple[int, int]]:
+        """Przesuniecia do sasiadow; na mapach iso zaleza od parzystosci y."""
+        key = (y % 2) if self.iso else 0
+        cache = getattr(self, "_off_cache", None)
+        if cache is None:
+            cache = self._off_cache = {}
+        if key not in cache:
+            # baza z dala od krawedzi, o tej samej parzystosci co y
+            bx = self.xsize // 2
+            by = 2 * (self.ysize // 4) + key
+            cache[key] = [(dx, dy)
+                          for dx in range(-2, 3) for dy in range(-2, 3)
+                          if (dx, dy) != (0, 0)
+                          and self.real_distance((bx, by),
+                                                 (bx + dx, by + dy)) == 1]
+        return cache[key]
+
+    def _vector_distance(self, dx: int, dy: int) -> int:
+        adx, ady = abs(dx), abs(dy)
+        if not self.hex:
+            return max(adx, ady)
+        if self.iso:
+            if (dx < 0 and dy > 0) or (dx > 0 and dy < 0):
+                return adx + ady          # iso-hex: brak ruchu po NE i SW
+        elif (dx > 0 and dy > 0) or (dx < 0 and dy < 0):
+            return adx + ady              # hex: brak ruchu po SE i NW
+        return max(adx, ady)
+
+
 def _distance(a: tuple[int, int], b: tuple[int, int]) -> int:
+    """Zapasowa odleglosc, gdy nie znamy geometrii (mapa kwadratowa)."""
     return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
 
 
@@ -460,6 +563,7 @@ class Intel:
 
     def __init__(self, save: Save):
         self.save = save
+        self.geom = MapGeometry.from_save(save)
 
     # --------------------------------------------------------------- ogolne
 
@@ -582,6 +686,457 @@ class Intel:
         out["garnizony"] = garrisons
         return out
 
+
+    # ------------------------------------------------------- korupcja i plan
+
+    def _city_effect(self, rs, etype: str, output: str, blds: set[str],
+                     gov: str, techs: set[str], mine: set[str],
+                     size: int = 0) -> int:
+        """Suma efektow danego typu dla miasta - jak get_city_output_bonus().
+
+        Obsluguje warunki, ktore realnie wystepuja w regulach marnotrawstwa:
+        rodzaj produkcji, ustroj, technologie, budynki (w miescie i u gracza)
+        oraz minimalny rozmiar miasta.
+        """
+        total = 0
+        for eff in rs.effects_by_type.get(etype, []):
+            ok = True
+            for r in eff.reqs:
+                if r.type == "OutputType":
+                    got = r.name.lower() == output.lower()
+                elif r.type == "Gov":
+                    got = r.name == gov
+                elif r.type == "Tech":
+                    got = r.name in techs
+                elif r.type == "Building":
+                    pool = blds if r.range.lower() == "city" else mine
+                    got = r.name in pool
+                elif r.type == "MinSize":
+                    got = size >= int(r.name) if str(r.name).isdigit() else False
+                elif r.type == "NationGroup":
+                    got = False
+                else:
+                    got = False          # nieznany warunek - nie zaliczamy
+                if got != r.present:
+                    ok = False
+                    break
+            if ok:
+                total += eff.value
+        return total
+
+    def corruption(self, rs) -> dict:
+        """Ile kazde miasto traci na marnotrawstwie i co to zmieni.
+
+        Wzor jeden do jednego z common/city.c: city_waste(). Poziom strat to
+        stala od ustroju plus skladnik od odleglosci do najblizszego osrodka
+        wladzy; budynki (ratusz, palac) zbijaja gotowa strate o procent.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        gov = s.me.government or ""
+        techs = _known_techs(s) - {"A_NONE"}
+        sec = s._sections[s.me.slot]
+        tbl = sec.table("c")
+        rows = list(tbl.dicts()) if tbl else []
+
+        cities = []
+        mine: set[str] = set()
+        for r in rows:
+            blds = set(s._bits(r.get("improvements")))
+            mine |= blds
+            cities.append({
+                "nazwa": str(r.get("name") or "?"),
+                "x": int(r.get("x") or 0), "y": int(r.get("y") or 0),
+                "rozmiar": int(r.get("size") or 0),
+                "budynki": blds,
+                "nadwyzka_tarcz": int(r.get("last_turns_shield_surplus") or 0),
+                "buduje": str(r.get("currently_building_name") or ""),
+            })
+
+        # osrodki wladzy: budynki dajace efekt Gov_Center
+        centers = []
+        for c in cities:
+            if self._city_effect(rs, "Gov_Center", "", c["budynki"], gov,
+                                 techs, mine, c["rozmiar"]) > 0:
+                centers.append(c)
+
+        def waste_for(c, output: str, extra: set[str] = frozenset()) -> dict:
+            blds = c["budynki"] | set(extra)
+            base = self._city_effect(rs, "Output_Waste", output, blds, gov,
+                                     techs, mine, c["rozmiar"])
+            by_d = self._city_effect(rs, "Output_Waste_By_Distance", output,
+                                     blds, gov, techs, mine, c["rozmiar"])
+            pct = self._city_effect(rs, "Output_Waste_Pct", output, blds, gov,
+                                    techs, mine, c["rozmiar"])
+            dist = None
+            if by_d > 0:
+                if not centers:
+                    return {"procent": 100, "dystans": None,
+                            "uwaga": "brak ośrodka władzy — przepada wszystko"}
+                dist = min(self.geom.real_distance((c["x"], c["y"]),
+                                                   (g["x"], g["y"]))
+                           for g in centers)
+                base += by_d * dist // 100
+            level = max(0, base)
+            level -= level * pct // 100
+            return {"procent": min(100, max(0, level)), "dystans": dist}
+
+        out_rows = []
+        for c in cities:
+            sh = waste_for(c, "Shield")
+            tr = waste_for(c, "Trade")
+            sh_ct = waste_for(c, "Shield", {"Courthouse"})
+            tr_ct = waste_for(c, "Trade", {"Courthouse"})
+            has_ct = "Courthouse" in c["budynki"]
+            # ile tarcz brutto potrzeba, by zostala obecna nadwyzka
+            netto = c["nadwyzka_tarcz"]
+            brutto = round(netto / (1 - sh["procent"] / 100)) if sh["procent"] < 100 else None
+            zysk = None
+            if not has_ct and brutto:
+                zysk = round(brutto * (sh["procent"] - sh_ct["procent"]) / 100)
+            out_rows.append({
+                "miasto": c["nazwa"], "x": c["x"], "y": c["y"],
+                "rozmiar": c["rozmiar"],
+                "dystans_do_wladzy": sh["dystans"],
+                "marnuje_tarcz_proc": sh["procent"],
+                "marnuje_handlu_proc": tr["procent"],
+                "nadwyzka_tarcz": netto,
+                "ma_ratusz": has_ct,
+                "z_ratuszem_tarcze_proc": sh_ct["procent"],
+                "z_ratuszem_handel_proc": tr_ct["procent"],
+                "ratusz_odzyska_tarcz": zysk,
+                "buduje": c["buduje"],
+            })
+        out_rows.sort(key=lambda r: -r["marnuje_tarcz_proc"])
+
+        ct = rs.buildings.get("Courthouse")
+        oplacalne = [r for r in out_rows
+                     if not r["ma_ratusz"] and (r["ratusz_odzyska_tarcz"] or 0) > 0]
+        for r in oplacalne:
+            if ct and r["ratusz_odzyska_tarcz"]:
+                r["ratusz_zwroci_sie_w_turach"] = (
+                    -(-ct.build_cost // r["ratusz_odzyska_tarcz"]))
+        return {
+            "ustroj": gov,
+            "osrodki_wladzy": [{"miasto": g["nazwa"], "x": g["x"], "y": g["y"]}
+                               for g in centers],
+            "budynki_znoszace_korupcje": self._anticorruption(rs, gov, techs),
+            "miasta": out_rows,
+            "ratusz_oplaca_sie_w": [r["miasto"] for r in
+                                    sorted(oplacalne,
+                                           key=lambda r: r.get("ratusz_zwroci_sie_w_turach", 999))],
+        }
+
+    def _anticorruption(self, rs, gov: str, techs: set[str]) -> list[dict]:
+        """Co w tych regulach zbija marnotrawstwo - i czy juz to mam."""
+        out = []
+        for etype, opis in (("Output_Waste_Pct", "zbija gotową stratę"),
+                            ("Gov_Center", "zeruje odległość (drugi ośrodek władzy)")):
+            for eff in rs.effects_by_type.get(etype, []):
+                names = [r.name for r in eff.reqs
+                         if r.type == "Building" and r.present]
+                if not names:
+                    continue
+                b = rs.buildings.get(names[0])
+                if b is None:
+                    continue
+                outs = [r.name for r in eff.reqs if r.type == "OutputType"]
+                out.append({
+                    "budynek": b.label or b.name,
+                    "nazwa_wewnetrzna": b.name,
+                    "dziala_na": outs or ["wszystko"],
+                    "efekt": f"-{eff.value}% ({opis})" if etype == "Output_Waste_Pct"
+                             else opis,
+                    "koszt": b.build_cost, "utrzymanie": b.upkeep,
+                    "technologia": ", ".join(b.req_techs()) or "-",
+                    "mam_technologie": all(t in techs for t in b.req_techs()),
+                })
+        # ustroje tez: ujemne Output_Waste_By_Distance znosi skladnik odleglosci
+        for eff in rs.effects_by_type.get("Output_Waste_By_Distance", []):
+            govs = [r.name for r in eff.reqs if r.type == "Gov" and r.present]
+            if govs and eff.value < 0:
+                outs = [r.name for r in eff.reqs if r.type == "OutputType"]
+                out.append({"budynek": f"ustrój {govs[0]}",
+                            "nazwa_wewnetrzna": govs[0],
+                            "dziala_na": outs or ["wszystko"],
+                            "efekt": "znosi cały składnik odległości",
+                            "koszt": 0, "utrzymanie": 0,
+                            "technologia": "-", "mam_technologie": True})
+        return out
+
+
+    # -------------------------------------------------- plan metropolia/kolonie
+
+    def build_plan(self, rs, metropolia: str = "") -> dict:
+        """Dzieli miasta na metropolie i kolonie i mowi, co gdzie budowac.
+
+        Podzial nie jest arbitralny - wynika z tego, jak dziala dany efekt:
+          * efekt liczony PROCENTEM od produkcji miasta (biblioteka, targ,
+            fabryka) oplaca sie tam, gdzie produkcja jest duza -> metropolia;
+          * efekt PLASKI (swiatynia, ratusz) daje tyle samo wszedzie -> kolonie;
+          * cud o zasiegu "City" dziala tylko w swoim miescie -> metropolia;
+            cud o zasiegu "Player"/"World" dziala wszedzie -> stawiaj tam,
+            gdzie zbudujesz go najszybciej.
+        Progi oplacalnosci liczymy z utrzymania: budynek za U zlota na ture
+        musi dac wiecej niz U.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        gov = s.me.government or ""
+        techs = _known_techs(s) - {"A_NONE"}
+        sec = s._sections[s.me.slot]
+        tbl = sec.table("c")
+        rows = list(tbl.dicts()) if tbl else []
+        if not rows:
+            return {"blad": "brak miast"}
+
+        mine: set[str] = set()
+        cities = []
+        for r in rows:
+            blds = set(s._bits(r.get("improvements")))
+            mine |= blds
+            cities.append({
+                "nazwa": str(r.get("name") or "?"),
+                "x": int(r.get("x") or 0), "y": int(r.get("y") or 0),
+                "rozmiar": int(r.get("size") or 0),
+                "budynki": blds,
+                "tarcze": int(r.get("last_turns_shield_surplus") or 0),
+            })
+
+        # metropolia: wskazana albo ta z palacem, a przy remisie najwieksza
+        pick = None
+        if metropolia:
+            pick = next((c for c in cities
+                         if c["nazwa"].lower() == metropolia.lower()), None)
+            if pick is None:
+                return {"blad": f"nie znam miasta {metropolia}",
+                        "dostepne": sorted(c["nazwa"] for c in cities)}
+        if pick is None:
+            centra = [c for c in cities
+                      if self._city_effect(rs, "Gov_Center", "", c["budynki"],
+                                           gov, techs, mine, c["rozmiar"]) > 0]
+            pool = centra or cities
+            pick = max(pool, key=lambda c: (c["tarcze"], c["rozmiar"]))
+
+        # --- klasyfikacja budynkow wprost z efektow
+        # kultura wisi przy kazdym cudzie i nic nie mowi o zasiegu dzialania
+        NIEISTOTNE = {"History"}
+        SKALUJACE = {"Output_Bonus", "Output_Bonus_2", "Output_Per_Tile",
+                     "Output_Inc_Tile", "Output_Waste_Pct", "Output_Add_Tile"}
+
+        def klasyfikuj(b) -> dict:
+            skala, plaskie = [], []
+            w_miescie = u_gracza = False
+            for etype, lst in rs.effects_by_type.items():
+                for eff in lst:
+                    hit = [r for r in eff.reqs
+                           if r.type == "Building" and r.present
+                           and r.name == b.name]
+                    if not hit:
+                        continue
+                    opis = f"{etype} {eff.value:+d}"
+                    (skala if etype in SKALUJACE else plaskie).append(opis)
+                    if etype in NIEISTOTNE:
+                        continue
+                    if hit[0].range.lower() == "city":
+                        w_miescie = True
+                    else:
+                        u_gracza = True
+            zasieg = ("miasto" if w_miescie and not u_gracza else
+                      "gracz" if u_gracza and not w_miescie else
+                      "mieszany" if w_miescie else "—")
+            if b.is_wonder:
+                rola = ("metropolia" if zasieg == "miasto" else
+                        "metropolia (część działa wszędzie)"
+                        if zasieg == "mieszany" else "gdziekolwiek")
+            elif skala and not plaskie:
+                # +1 do kafla rosnie z liczba obrabianych kafli, ale dziala
+                # tez w malym miescie - to nie to samo co bonus procentowy
+                rola = ("najpierw metropolia"
+                        if all(o.startswith("Output_Add_Tile") for o in skala)
+                        else "metropolia")
+            elif plaskie and not skala:
+                rola = "wszędzie"
+            elif skala:
+                rola = "najpierw metropolia"
+            else:
+                rola = "wszędzie"
+            return {"rola": rola, "skalujace": skala, "plaskie": plaskie,
+                    "zasieg": zasieg}
+
+        epoki = rs.eras()
+        def epoka_of(b) -> str:
+            d = max([rs.tech_depth(t) for t in b.req_techs()], default=0)
+            return rs.era_at(d)["nazwa"]
+
+        plan: dict[str, dict] = {}
+        for name, b in rs.buildings.items():
+            if name == "Coinage":
+                continue
+            k = klasyfikuj(b)
+            ep = epoka_of(b)
+            wpis = {
+                "budynek": b.label or b.name,
+                "nazwa_wewnetrzna": name,
+                "koszt": b.build_cost,
+                "utrzymanie": b.upkeep,
+                "technologia": ", ".join(b.req_techs()) or "-",
+                "mam_technologie": all(t in techs for t in b.req_techs()),
+                "gdzie": k["rola"],
+                "zasieg_efektu": k["zasieg"],
+                "dlaczego": ("efekt procentowy od produkcji miasta"
+                             if k["skalujace"] and not k["plaskie"]
+                             else "efekt stały, taki sam w każdym mieście"
+                             if k["plaskie"] and not k["skalujace"]
+                             else "część efektu skaluje się z produkcją"),
+                "efekty": k["skalujace"] + k["plaskie"],
+                "cud": b.is_wonder,
+                "mam_juz_w": sorted(c["nazwa"] for c in cities
+                                    if name in c["budynki"]),
+            }
+            plan.setdefault(ep, {"budynki": [], "cuda": []})
+            plan[ep]["cuda" if b.is_wonder else "budynki"].append(wpis)
+
+        for ep in plan:
+            for k in ("budynki", "cuda"):
+                plan[ep][k].sort(key=lambda w: (not w["mam_technologie"],
+                                                w["koszt"]))
+
+        kolejnosc = [e["nazwa"] for e in epoki if e["nazwa"] in plan]
+        kolejnosc += [e for e in plan if e not in kolejnosc]
+
+        return {
+            "metropolia": {"miasto": pick["nazwa"], "x": pick["x"],
+                           "y": pick["y"], "rozmiar": pick["rozmiar"],
+                           "tarcze_na_ture": pick["tarcze"]},
+            "kolonie": sorted((c["nazwa"] for c in cities
+                               if c["nazwa"] != pick["nazwa"])),
+            "zasada": (
+                "Cudy o zasięgu City stawiaj w metropolii — działają tylko "
+                "tam. Cudy o zasięgu Player/World stawiaj w mieście, które "
+                "zbuduje je najszybciej. Budynki z bonusem procentowym dają "
+                "tyle, ile jest od czego liczyć — w małej kolonii +50% z 4 "
+                "to +2. Budynki o stałym efekcie działają wszędzie tak samo."
+            ),
+            "epoki": [{"epoka": ep, **plan[ep]} for ep in kolejnosc],
+        }
+
+    # ----------------------------------------------------- drzewo technologii
+
+    def tech_tree(self, rs, limit: int = 12) -> dict:
+        """Twoje realne technologie, nie przyblizenie z suwaka.
+
+        Badania czesto wyprzedzaja swoja epoke - gracz moze miec technologie
+        z glebi drzewa, brakuje mu za to tanich z poczatku. Dlatego doradzamy
+        z faktycznego zbioru, a nie z progu glebokosci.
+        """
+        s = self.save
+        known = _known_techs(s)
+        if not known:
+            return {"blad": "zapis nie zawiera drzewa technologii"}
+        real = {t for t in known if t != "A_NONE"}
+
+        research = s.reg.get("research")
+        row = list(research.table("r").dicts())[0] if research else {}
+        sec = s._sections[s.me.slot] if s.me else None
+        rate = sec.int("research.bulbs_last_turn") if sec else 0
+
+        # koszt kolejnej technologii wg regul (styl Linear)
+        import os
+        from .registry import parse_file
+        style, base, box = "Linear", 10, 100
+        path = os.path.join(rs.path, "game.ruleset")
+        if os.path.exists(path):
+            g = parse_file(path, base_dir=os.path.dirname(rs.path))
+            r = g.get("research")
+            if r:
+                style = r.str("tech_cost_style", "Linear")
+                base = r.int("base_tech_cost", 10)
+        st = s.reg.get("settings")
+        stbl = st.table("set") if st else None
+        for x in (stbl.dicts() if stbl else []):
+            if str(x.get("name")) == "sciencebox":
+                box = int(x.get("value") or 100)
+
+        def cost_of(nth: int) -> int:
+            """Koszt n-tej z kolei technologii."""
+            if style.lower().startswith("linear"):
+                return base * nth * box // 100
+            return base * nth * box // 100      # inne style: to samo przyblizenie
+
+        n_known = len(real)
+        next_cost = cost_of(n_known + 1)
+        have = int(row.get("bulbs") or 0)
+        turns = None
+        if rate > 0:
+            turns = max(0, -(-(next_cost - have) // rate))
+
+        # co odblokowuje dana brakujaca technologia
+        def unlocks(tech: str) -> dict:
+            plus = real | {tech}
+            u = [x.name for x in rs.units.values()
+                 if (x.attack or x.defense)
+                 and tech in x.req_techs()
+                 and all(t in plus for t in x.req_techs())]
+            b = [x.name for x in rs.buildings.values()
+                 if tech in x.req_techs() and all(t in plus for t in x.req_techs())]
+            return {"jednostki": sorted(u),
+                    "budynki": sorted(x for x in b if not rs.buildings[x].is_wonder),
+                    "cuda": sorted(x for x in b if rs.buildings[x].is_wonder)}
+
+        def missing_chain(tech: str) -> list[str]:
+            need = rs._closure(tech, set())
+            return sorted(t for t in need if t not in real)
+
+        cands = []
+        for name in rs.techs:
+            if name in real:
+                continue
+            chain = missing_chain(name)
+            if not chain:
+                continue
+            u = unlocks(name)
+            waga = len(u["jednostki"]) + len(u["budynki"]) + 2 * len(u["cuda"])
+            koszt = sum(cost_of(n_known + i + 1) for i in range(len(chain)))
+            cands.append({
+                "technologia": name,
+                "brakuje_technologii": len(chain),
+                "lancuch": chain,
+                "koszt_bulbs": koszt,
+                "tur_przy_obecnym_tempie": (max(1, -(-koszt // rate))
+                                            if rate > 0 else None),
+                "odblokowuje": u,
+                "waga": waga,
+            })
+        # najpierw to, co cos daje i jest blisko
+        cands.sort(key=lambda c: (c["brakuje_technologii"], -c["waga"],
+                                  c["koszt_bulbs"]))
+        useful = [c for c in cands if c["waga"] > 0][:limit]
+
+        # technologie "wyprzedzajace epoke": glebsze niz mediana znanych
+        depths = sorted(rs.tech_depth(t) for t in real)
+        mediana = depths[len(depths) // 2] if depths else 0
+        ahead = sorted(((rs.tech_depth(t), t) for t in real
+                        if rs.tech_depth(t) > mediana + 3), reverse=True)
+
+        return {
+            "znanych_technologii": n_known,
+            "epoka_wg_mediany": rs.era_at(mediana)["nazwa"],
+            "epoka_wg_najglebszej": rs.era_at(depths[-1] if depths else 0)["nazwa"],
+            "wyprzedzaja_epoke": [{"technologia": t, "glebokosc": d}
+                                  for d, t in ahead[:10]],
+            "badane_teraz": str(row.get("now_name") or "") or None,
+            "cel_badan": str(row.get("goal_name") or "") or None,
+            "bulbs_zebrane": have,
+            "koszt_kolejnej": next_cost,
+            "tempo_bulbs_na_ture": rate,
+            "tur_do_konca": turns,
+            "najblizsze_oplacalne": useful,
+            "znane": sorted(real),
+        }
+
     # ---------------------------------------------------------- handel
 
     def _continents(self) -> dict[tuple[int, int], int]:
@@ -592,7 +1147,7 @@ class Intel:
             t = tmap.terrain(x, y)
             return t is not None and t not in ocean
 
-        return regions(tmap, land)
+        return regions(tmap, land, self.geom)
 
     def trade_routes(self, rs, limit: int = 15, full: bool = False,
                      only_overseas: bool = False) -> dict:
@@ -792,7 +1347,7 @@ class Intel:
                 by_class[rs.uclass_of(ut).name].append(u)
         for cls, group in by_class.items():
             ok = passability(rs, tmap, cls)
-            reg = regions(tmap, ok)
+            reg = regions(tmap, ok, self.geom)
             good = {reg.get(spot, 0) for spot in enemy_spots if reg.get(spot)}
             cut = [u for u in group if reg.get((u.x, u.y), 0) not in good]
             if not cut:
@@ -1030,7 +1585,7 @@ class Intel:
                 continue
             uclass = rs.uclass_of(ut).name
             ok = passability(rs, tmap, uclass)
-            reg = regions(tmap, ok)
+            reg = regions(tmap, ok, self.geom)
             mine = [u for u in my_units if u.type == tname]
             where = collections.Counter(reg.get((u.x, u.y), 0) for u in mine)
             entry = {
@@ -1066,7 +1621,7 @@ class Intel:
                              if reg.get((u.x, u.y), 0) == z), None)
                 if spot is None:
                     continue
-                link = road_link(rs, tmap, ok, spot, main, reg)
+                link = road_link(rs, tmap, ok, spot, main, reg, geom=self.geom)
                 if link:
                     links.append({"obszar": z, "odcietych_sztuk": n, **link})
             if links:
@@ -1099,9 +1654,11 @@ class Intel:
         my_units = s.units_of(s.me.slot)
         rows = []
         for name, x, y, size, walls in targets:
-            near_c = sorted(((_distance((x, y), (c.x, c.y)), c) for c in my_cities),
+            near_c = sorted(((self.geom.real_distance((x, y), (c.x, c.y)), c)
+                             for c in my_cities),
                             key=lambda t: t[0])[:3]
-            near_u = [u for u in my_units if _distance((x, y), (u.x, u.y)) <= max_distance]
+            near_u = [u for u in my_units
+                      if self.geom.real_distance((x, y), (u.x, u.y)) <= max_distance]
             by_type: dict[str, int] = {}
             for u in near_u:
                 by_type[u.type] = by_type.get(u.type, 0) + 1
@@ -1161,6 +1718,14 @@ class IntelMixin:
             out["zestaw_regul_ustawiony"] = applied
         except Exception as exc:  # noqa: BLE001
             out["zestaw_regul_ustawiony"] = f"nie udało się: {exc}"
+        # od razu bierzemy jego prawdziwe drzewo zamiast progu z suwaka
+        try:
+            known = _known_techs(intel.save) - {"A_NONE"}
+            if known:
+                self._set_tech_override(known)
+                out["technologie_z_zapisu"] = len(known)
+        except Exception:  # noqa: BLE001
+            pass
         return out
 
     def ai_army(self, args: dict) -> dict:
@@ -1169,6 +1734,49 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_build_plan(self, args: dict) -> dict:
+        return self._need_intel().build_plan(
+            self._intel_ruleset(), str(args.get("metropolia", "")))
+
+    def ai_corruption(self, args: dict) -> dict:
+        return self._need_intel().corruption(self._intel_ruleset())
+
+    def ai_techs(self, args: dict) -> dict:
+        rs = self._intel_ruleset()
+        out = self._need_intel().tech_tree(rs, int(args.get("limit") or 12))
+        if "blad" in out:
+            return out
+        if args.get("zastosuj") is not None:
+            self._set_tech_override(out["znane"] if args["zastosuj"] else None)
+        out["filtr_z_zapisu"] = bool(getattr(self, "_tech_override", None))
+        return out
+
+    def _set_tech_override(self, known) -> None:
+        """Podmienia filtr technologii: suwak -> faktycznie zbadane."""
+        self._tech_override = set(known) if known else None
+        hook = getattr(self, "_intel_tech_filter_changed", None)
+        if hook:
+            hook()
+
+    def ai_eras(self, args: dict) -> dict:
+        rs = self._intel_ruleset()
+        depth = args.get("prog")
+        depth = rs.max_tech_depth() if depth is None else int(depth)
+        eras = rs.eras()
+        out = {
+            "zestaw_regul": rs.name,
+            "maks_prog": rs.max_tech_depth(),
+            "prog": depth,
+            "epoka": rs.era_at(depth)["nazwa"],
+            "epoki": [{**e, "nowe": rs.unlocked_at(e["prog"])} for e in eras],
+            "nowe_na_tym_progu": rs.unlocked_at(depth),
+        }
+        nxt = next((e for e in eras if e["prog"] > depth), None)
+        if nxt:
+            out["nastepna_epoka"] = {"nazwa": nxt["nazwa"], "prog": nxt["prog"],
+                                     "technologia": nxt["technologia"]}
+        return out
 
     def ai_trade(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))

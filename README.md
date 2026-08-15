@@ -36,6 +36,29 @@ python3 fcsiege.py mcp         # serwer MCP po stdio
 python3 fcsiege.py api         # API HTTP na 127.0.0.1:8765
 ```
 
+## Języki
+
+Interfejs, narzędzia asystenta i API mówią po polsku albo po angielsku.
+
+```bash
+python3 fcsiege.py --lang=en          # okno po angielsku
+FCSIEGE_LANG=en python3 fcsiege.py    # to samo przez zmienną środowiska
+python3 fcsiege.py mcp --lang=en      # serwer MCP
+curl "localhost:8765/state?lang=en"   # API: parametr albo Accept-Language
+```
+
+W oknie służy do tego przełącznik `PL / EN` w prawym górnym rogu; zmiana buduje
+okno od nowa i przenosi scenariusz tym samym zrzutem, którego używa asystent.
+
+Tłumaczone są trzy warstwy: napisy w oknie, **klucze i wartości w odpowiedziach
+narzędzi** oraz nazwy i opisy narzędzi (`policz` ↔ `compute`). Nazwy z zestawu
+reguł — `Monarchy`, `Output_Bonus`, `Knights` — zostają nietknięte, bo należą do
+gry, nie do aplikacji. Polski jest językiem źródłowym: kluczem w katalogu jest
+sam polski napis, więc kod czyta się tak samo jak wcześniej.
+
+Test `tests/test_i18n.py` pilnuje, żeby każdy napis owinięty w `_()` miał
+tłumaczenie — bez tego angielski interfejs po cichu gubiłby pojedyncze zdania.
+
 ## Skąd biorą się liczby
 
 Aplikacja **nie ma zaszytej ani jednej statystyki**. Przy starcie parsuje pliki
@@ -224,7 +247,59 @@ odpowiedź mówi, w którym trybie powstała — nie da się przypadkiem zerkną
 w karty przeciwnika i o tym zapomnieć.
 
 Narzędzia wywiadu: `wczytaj_zapis`, `moje_wojska`, `wywiad_o_nacji`,
-`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`, `co_da_rozwiazanie`, `szlaki_handlowe`.
+`linia_frontu`, `porownaj_ustroje`, `przejezdnosc`, `audyt_miast`,
+`co_da_rozwiazanie`, `szlaki_handlowe`, `moje_technologie`, `korupcja`,
+`plan_budowy`, `epoki`.
+
+### Geometria mapy
+
+Zapis trzyma **współrzędne natywne**, a Freeciv liczy odległość w mapowych, po
+zawinięciu wektora. Na mapie iso-hex nie da się iść po przekątnej NE ani SW,
+więc odległość nie jest zwykłym maksimum, a kafel ma **sześciu** sąsiadów, nie
+ośmiu. `MapGeometry` odtwarza `common/map.c` jeden do jednego i czyta topologię
+oraz zawijanie z ustawień partii — bez tego spójne obszary lądu wychodzą
+połączone tam, gdzie w grze są rozdzielone.
+
+### Drzewo technologii
+
+`moje_technologie` czyta **faktyczny** zbiór zbadanych technologii z zapisu,
+zamiast przybliżać go progiem głębokości. Badania często wyprzedzają swoją
+epokę — narzędzie pokazuje, które konkretnie, co jest badane teraz, ile bulbs na
+turę i ile tur zostało, oraz które brakujące technologie są najbliżej i co
+dokładnie odblokują. Wczytanie zapisu **automatycznie przestawia filtr dostępnych
+jednostek** na to, co gracz naprawdę zna; suwak epok jest wtedy wyłączony,
+a nagłówek pisze „z zapisu".
+
+### Korupcja
+
+`korupcja` odtwarza `city_waste()` z `common/city.c`:
+
+```
+poziom = stała_od_ustroju + (na_odległość × dystans_do_ośrodka_władzy) / 100
+strata = produkcja × poziom / 100
+strata = strata − strata × redukcja_budynków / 100
+```
+
+Dla każdego miasta podaje dystans do najbliższego ośrodka władzy, stratę tarcz
+i handlu, a dla miast bez ratusza — ile odzyska i po ilu turach się zwróci.
+Wypisuje też wszystko, co w danym zestawie reguł zbija marnotrawstwo, łącznie
+z ustrojami, które znoszą cały składnik odległości.
+
+### Plan budowy
+
+`plan_budowy` dzieli miasta na metropolię i kolonie i mówi, co gdzie budować,
+epoka po epoce. Podział nie jest arbitralny — wynika z rodzaju efektu
+odczytanego z reguł:
+
+| rodzaj efektu | gdzie się opłaca |
+|---|---|
+| procentowy od produkcji miasta (`Output_Bonus`) | metropolia |
+| stały (`Make_Content`, `Size_Adj`) | wszędzie tak samo |
+| cud o zasięgu `City` | tylko metropolia |
+| cud o zasięgu `Player` / `World` | gdziekolwiek — tam, gdzie najszybciej |
+
+Uwaga na pułapkę: efekt `History` (kultura) wisi przy **każdym** cudzie i ma
+zasięg `City`, więc nie może decydować o klasyfikacji.
 
 ### Szlaki handlowe
 
@@ -341,6 +416,7 @@ Oba tryby to ten sam model widziany z dwóch stron; test
 python3 tests/test_combat.py    # silnik walki
 python3 tests/test_chat.py      # asystent (bez sieci, klient podstawiony)
 python3 tests/test_surfaces.py  # MCP, API HTTP, gniazdo sterujące
+python3 tests/test_i18n.py      # dwujęzyczność: okno, narzędzia, API
 ```
 
 `test_surfaces.py` sprawdza zgodność silnika bez Qt z oknem, uruchamia serwer MCP
@@ -353,6 +429,12 @@ naprawdę przestawia kontrolkę i czy zwraca te same liczby co karta odpowiedzi)
 pełną pętlę `tool_use → tool_result → odpowiedź` na podstawionym kliencie oraz
 obsługę odmowy modelu.
 
+`test_i18n.py` pilnuje przede wszystkim **kompletności katalogu**: każdy napis
+owinięty w `_()` musi mieć tłumaczenie, żadne tłumaczenie nie może być puste,
+a żaden napis z polskimi znakami nie może zostać nieprzetłumaczony. Poza tym
+buduje okno w obu językach, sprawdza aliasy narzędzi w obie strony i uderza
+w API z `?lang=en` oraz nagłówkiem `Accept-Language`.
+
 `test_combat.py` sprawdza m.in.: zgodność wzoru na pojedynek z niezależną symulacją runda po
 rundzie (200 tys. prób), ręcznie policzone wartości dla `classic`, różnice
 między zestawami reguł, zużycie rakiet, działanie koszar i `fortify`,
@@ -364,6 +446,9 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
   traktowane jako niespełnione, a ich lista trafia do „Uwag silnika”.
 * Zestaw `alien` używa efektu `Combat_Rounds` (limit rund) — wyniki są tam
   przybliżone i aplikacja o tym ostrzega.
+* `plan_budowy` klasyfikuje budynki po rodzaju efektu; progi opłacalności
+  (np. „fabryka od 12 tarcz na turę") wyprowadza z utrzymania, a nie z symulacji
+  miasta — to granica decyzyjna, nie prognoza.
 * Kalkulator nie wie, czy miasto jest nadbrzeżne ani czy lotnictwo doleci —
   dlatego filtr „tylko jednostki, które mogą samodzielnie zająć miasto” jest
   domyślnie włączony.
@@ -388,7 +473,8 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/mcp_server.py` | serwer MCP (stdio) |
 | `fcsiege/http_api.py` | API HTTP + schemat OpenAPI |
 | `fcsiege/control.py` | gniazdo sterujące uruchomionym oknem |
-| `fcsiege/savegame.py` | czytanie zapisów gry + filtr mgły wojny |
+| `fcsiege/savegame.py` | czytanie zapisów gry, geometria mapy, korupcja, plan budowy |
+| `fcsiege/i18n.py` | katalogi polski↔angielski dla okna, narzędzi i odpowiedzi |
 | `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
 | `fcsiege/aiclient.py` | poświadczenia i pętla rozmowy ze strumieniowaniem |
 | `fcsiege/chatpanel.py` | interfejs czatu i logowania |

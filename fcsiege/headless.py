@@ -130,6 +130,9 @@ class HeadlessBridge(IntelMixin):
 
     def known_techs(self) -> set[str] | None:
         st = self.state
+        over = getattr(self, "_tech_override", None)
+        if over:
+            return set(over)
         if st.tech_depth is None or st.tech_depth >= self.rs.max_tech_depth():
             return None
         return self.rs.techs_up_to(st.tech_depth)

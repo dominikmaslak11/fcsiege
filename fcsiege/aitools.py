@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from typing import Any, Protocol
 
+from . import i18n
+
 MODE_ATTACK = "szturm"
 MODE_DEFENSE = "obrona"
 
@@ -36,6 +38,7 @@ class ScenarioBridge(Protocol):
     def ai_cities(self, args: dict) -> dict: ...
     def ai_disband(self, args: dict) -> dict: ...
     def ai_trade(self, args: dict) -> dict: ...
+    def ai_eras(self, args: dict) -> dict: ...
 
 
 TOOL_SPECS: list[dict[str, Any]] = [
@@ -279,6 +282,86 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "epoki",
+        "description": (
+            "Lista epok w aktualnym zestawie reguł wraz z progiem drzewa "
+            "technologii, który je otwiera, oraz tym, co dochodzi na danym "
+            "progu: jednostki, budynki i cuda świata. Wywołaj, gdy użytkownik "
+            "pyta, w jakiej jest epoce, co mu się odblokuje albo do czego warto "
+            "dobić technologicznie."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prog": {"type": "integer",
+                         "description": "sprawdź konkretny próg; puste = obecny"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "plan_budowy",
+        "description": (
+            "Dzieli miasta na metropolię i kolonie i mówi, co gdzie budować, "
+            "epoka po epoce, z podziałem na budynki i cudy świata. Podział "
+            "wynika z rodzaju efektu odczytanego z reguł: bonus procentowy "
+            "opłaca się w dużym mieście, efekt stały wszędzie tak samo, cud "
+            "o zasięgu City działa tylko w swoim mieście, a o zasięgu "
+            "Player/World wszędzie. Wywołaj przy pytaniach o strategię "
+            "rozbudowy, kolejność budynków, gdzie stawiać cudy."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "metropolia": {"type": "string",
+                               "description": "miasto-stolica produkcji; "
+                                              "puste = wybierz automatycznie"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "korupcja",
+        "description": (
+            "Liczy marnotrawstwo (korupcję) tarcz i handlu w każdym Twoim "
+            "mieście wprost ze wzoru z gry: stała od ustroju plus składnik od "
+            "odległości do najbliższego ośrodka władzy, pomniejszone przez "
+            "budynki. Pokazuje, ile odzyska ratusz w każdym mieście i po ilu "
+            "turach się zwróci, oraz jakie budynki i ustroje w tym zestawie "
+            "reguł w ogóle zbijają korupcję. Wywołaj, gdy pada pytanie o "
+            "korupcję, o opłacalność odległych kolonii albo o to, gdzie "
+            "produkcja przepada."
+        ),
+        "input_schema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
+        "name": "moje_technologie",
+        "description": (
+            "Czyta FAKTYCZNE drzewo technologii gracza z wczytanego zapisu: co "
+            "ma zbadane, co bada teraz, ile bulbs na turę, ile tur do końca, "
+            "które technologie wyprzedzają jego epokę oraz — najważniejsze — "
+            "które brakujące technologie są najbliżej i co konkretnie odblokują "
+            "(jednostki, budynki, cuda). Używaj tego ZAMIAST narzędzia 'epoki', "
+            "gdy zapis jest wczytany: badania często wyprzedzają epokę, więc "
+            "próg głębokości bywa mylący. Ustawia też filtr dostępnych jednostek "
+            "w kalkulatorze na to, co gracz naprawdę zna."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "ile propozycji badań (domyślnie 12)"},
+                "zastosuj": {
+                    "type": "boolean",
+                    "description": ("true = filtruj kalkulator wg realnych "
+                                    "technologii, false = wróć do suwaka"),
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "szlaki_handlowe",
         "description": (
             "Wyznacza optymalne szlaki handlowe dla karawan, wprost z reguł "
@@ -425,10 +508,62 @@ TOOL_METHOD = {
     "audyt_miast": "ai_cities",
     "co_da_rozwiazanie": "ai_disband",
     "szlaki_handlowe": "ai_trade",
+    "epoki": "ai_eras",
+    "moje_technologie": "ai_techs",
+    "korupcja": "ai_corruption",
+    "plan_budowy": "ai_build_plan",
 }
 
 
 def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
+    """Wykonuje narzedzie w biezacym jezyku.
+
+    Nazwy i argumenty moga przyjsc po angielsku - sprowadzamy je do postaci
+    kanonicznej (polskiej), liczymy, a wynik tlumaczymy z powrotem. Przy jezyku
+    polskim wszystkie trzy kroki sa tozsamosciowe, wiec nic nie kosztuja.
+    """
+    return i18n.translate(_dispatch(bridge, i18n.canonical_tool(name),
+                                    i18n.untranslate_args(args or {})))
+
+
+def localized_specs(lang: str | None = None) -> list[dict[str, Any]]:
+    """Definicje narzedzi w danym jezyku - nazwy, opisy i nazwy argumentow."""
+    prev = i18n.language()
+    if lang:
+        i18n.set_language(i18n.normalize(lang))
+    try:
+        if i18n.language() != "en":
+            return TOOL_SPECS
+        out = []
+        for spec in TOOL_SPECS:
+            out.append({
+                **spec,
+                "name": i18n.tool_name(spec["name"]),
+                "description": i18n.tool_desc(spec["name"], spec["description"]),
+                "input_schema": _localize_schema(spec["input_schema"]),
+            })
+        return out
+    finally:
+        i18n.set_language(prev)
+
+
+def _localize_schema(schema: dict) -> dict:
+    out = dict(schema)
+    props = schema.get("properties")
+    if props:
+        out["properties"] = {
+            i18n.key(k): (_localize_schema(v) if isinstance(v, dict)
+                          and (v.get("properties") or v.get("items")) else v)
+            for k, v in props.items()
+        }
+    if isinstance(schema.get("items"), dict):
+        out["items"] = _localize_schema(schema["items"])
+    if schema.get("required"):
+        out["required"] = [i18n.key(k) for k in schema["required"]]
+    return out
+
+
+def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
     """Wykonuje narzedzie. Musi byc wolane w watku interfejsu."""
     if name == "pokaz_stan":
         return bridge.ai_snapshot()
@@ -466,7 +601,15 @@ def dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_disband(dict(args))
     if name == "szlaki_handlowe":
         return bridge.ai_trade(dict(args))
-    return {"blad": f"nieznane narzędzie: {name}"}
+    if name == "epoki":
+        return bridge.ai_eras(dict(args))
+    if name == "moje_technologie":
+        return bridge.ai_techs(dict(args))
+    if name == "korupcja":
+        return bridge.ai_corruption(dict(args))
+    if name == "plan_budowy":
+        return bridge.ai_build_plan(dict(args))
+    return {"blad": f"{i18n._('nieznane narzędzie')}: {name}"}
 
 
 def result_to_text(result: Any) -> str:

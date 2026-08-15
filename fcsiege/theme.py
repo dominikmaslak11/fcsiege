@@ -81,6 +81,11 @@ QLabel#FieldLabel {{
     color: {TEXT_DIM};
     font-weight: 600;
 }}
+QLabel#EraLabel {{
+    font-size: 12px;
+    font-weight: 700;
+    color: {ACCENT};
+}}
 QLabel#Hint {{
     font-size: 11px;
     color: {TEXT_FAINT};

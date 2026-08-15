@@ -19,6 +19,8 @@ from . import theme
 from .advisor import (counter_advice, defense_advice, max_wave_stopped,
                       min_defenders, rank_defenders, rank_staging_terrain,
                       rank_units, wave_is_capped)
+from . import i18n
+from .i18n import _
 from .combat import (Side, Situation, defense_stand, duel, heals_fully_in_city,
                      siege, veteran_build_level)
 from .model import Ruleset, discover_rulesets, default_ruleset_roots
@@ -101,7 +103,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setObjectName("Root")
-        self.setWindowTitle("FCSiege — kalkulator szturmu (Freeciv)")
+        self.setWindowTitle(_("FCSiege — kalkulator szturmu (Freeciv)"))
         self.resize(1480, 940)
         self.setMinimumSize(1180, 760)
 
@@ -166,17 +168,17 @@ class MainWindow(QWidget):
 
         titles = QVBoxLayout()
         titles.setSpacing(1)
-        t = QLabel("FCSiege")
+        t = QLabel(_("FCSiege"))
         t.setObjectName("AppTitle")
-        s = QLabel("Szturm i obrona miasta, liczone z plików reguł Freeciva")
+        s = QLabel(_("Szturm i obrona miasta, liczone z plików reguł Freeciva"))
         s.setObjectName("AppSub")
         titles.addWidget(t)
         titles.addWidget(s)
         lay.addLayout(titles)
         lay.addSpacing(18)
 
-        self.btn_attack = QPushButton("Szturm")
-        self.btn_defense = QPushButton("Obrona")
+        self.btn_attack = QPushButton(_("Szturm"))
+        self.btn_defense = QPushButton(_("Obrona"))
         self.mode_group = QButtonGroup(self)
         for btn, mode in ((self.btn_attack, MODE_ATTACK),
                           (self.btn_defense, MODE_DEFENSE)):
@@ -196,7 +198,7 @@ class MainWindow(QWidget):
         lay.addWidget(switch)
         lay.addStretch(1)
 
-        self.btn_chat = QPushButton("Asystent")
+        self.btn_chat = QPushButton(_("Asystent"))
         self.btn_chat.setCheckable(True)
         self.btn_chat.setObjectName("ModeButton")
         self.btn_chat.setFixedWidth(94)
@@ -209,23 +211,67 @@ class MainWindow(QWidget):
         lay.addWidget(chat_wrap)
         lay.addSpacing(8)
 
-        lay.addWidget(_label("ZESTAW REGUŁ"))
+        lay.addWidget(_label(_("ZESTAW REGUŁ")))
         self.cmb_ruleset = QComboBox()
         self.cmb_ruleset.setFixedWidth(136)
         self.cmb_ruleset.currentIndexChanged.connect(self._on_ruleset_changed)
         lay.addWidget(self.cmb_ruleset)
 
         lay.addSpacing(8)
-        lay.addWidget(_label("POZIOM TECHNOLOGICZNY"))
+        lay.addWidget(_label(_("POZIOM TECHNOLOGICZNY")))
         self.sld_tech = QSlider(Qt.Horizontal)
-        self.sld_tech.setFixedWidth(150)
+        self.sld_tech.setFixedWidth(132)
         self.sld_tech.valueChanged.connect(self._on_tech_changed)
         lay.addWidget(self.sld_tech)
+        techbox = QWidget()
+        tb = QVBoxLayout(techbox)
+        tb.setContentsMargins(0, 0, 0, 0)
+        tb.setSpacing(0)
+        self.lbl_era = QLabel("—")
+        self.lbl_era.setObjectName("EraLabel")
         self.lbl_tech = QLabel("—")
         self.lbl_tech.setObjectName("Hint")
-        self.lbl_tech.setFixedWidth(168)
-        lay.addWidget(self.lbl_tech)
+        tb.addWidget(self.lbl_era)
+        tb.addWidget(self.lbl_tech)
+        techbox.setFixedWidth(248)
+        lay.addWidget(techbox)
+
+        lay.addSpacing(8)
+        self.cmb_lang = QComboBox()
+        self.cmb_lang.setFixedWidth(58)
+        self.cmb_lang.addItem("PL", "pl")
+        self.cmb_lang.addItem("EN", "en")
+        self.cmb_lang.setCurrentIndex(0 if i18n.language() == "pl" else 1)
+        self.cmb_lang.setToolTip(_("Język interfejsu"))
+        self.cmb_lang.currentIndexChanged.connect(self._on_language_changed)
+        lay.addWidget(self.cmb_lang)
         return bar
+
+    def _on_language_changed(self) -> None:
+        """Przelacza jezyk, przenoszac scenariusz do nowego okna.
+
+        Napisy trafiaja do widzetow w chwili budowania, wiec zmiana jezyka
+        wymaga zbudowania okna od nowa. Stan przenosimy tym samym zrzutem,
+        ktorego uzywa asystent - dzieki temu nie ma osobnej sciezki kodu.
+        """
+        want = self.cmb_lang.currentData()
+        if want == i18n.language():
+            return
+        snapshot = self.ai_snapshot()
+        intel, full = self._intel, self._intel_full
+        over = getattr(self, "_tech_override", None)
+        i18n.set_language(want)
+        fresh = MainWindow()
+        fresh._intel, fresh._intel_full = intel, full
+        fresh._tech_override = over
+        try:
+            fresh.ai_apply(snapshot)
+        except Exception:  # noqa: BLE001 - zrzut moze zawierac nazwy spoza regul
+            pass
+        fresh.resize(self.size())
+        fresh.move(self.pos())
+        fresh.show()
+        self.close()
 
     # ------------------------------------------------------- kolumna ataku
 
@@ -235,15 +281,15 @@ class MainWindow(QWidget):
         lay.setContentsMargins(0, 0, 10, 0)
         lay.setSpacing(14)
 
-        self.card_solo = card = Card("Atakujący", "attack")
+        self.card_solo = card = Card(_("Atakujący"), "attack")
         b = card.body()
-        self.lbl_solo_unit = _label("Jednostka")
+        self.lbl_solo_unit = _label(_("Jednostka"))
         b.addWidget(self.lbl_solo_unit)
         self.cmb_att_unit = _combo(12)
         self.cmb_att_unit.currentIndexChanged.connect(self._queue)
         b.addWidget(self.cmb_att_unit)
 
-        b.addWidget(_label("Doświadczenie"))
+        b.addWidget(_label(_("Doświadczenie")))
         self.cmb_att_vet = _combo(10)
         self.cmb_att_vet.currentIndexChanged.connect(self._queue)
         b.addWidget(self.cmb_att_vet)
@@ -252,7 +298,7 @@ class MainWindow(QWidget):
         wl = QVBoxLayout(self.wrap_moves)
         wl.setContentsMargins(0, 0, 0, 0)
         wl.setSpacing(6)
-        wl.addWidget(_label("Ułamki ruchu w chwili ataku"))
+        wl.addWidget(_label(_("Ułamki ruchu w chwili ataku")))
         self.spn_moves = QSpinBox()
         self.spn_moves.setRange(1, 24)
         self.spn_moves.valueChanged.connect(self._queue)
@@ -265,9 +311,9 @@ class MainWindow(QWidget):
         b.addWidget(self.chips_att)
         lay.addWidget(card)
 
-        self.card_staging = card2 = Card("Skąd atakujesz", "attack")
+        self.card_staging = card2 = Card(_("Skąd atakujesz"), "attack")
         b2 = card2.body()
-        self.lbl_staging_field = _label("Teren jednostki szturmowej")
+        self.lbl_staging_field = _label(_("Teren jednostki szturmowej"))
         b2.addWidget(self.lbl_staging_field)
         self.cmb_att_terrain = _combo(12)
         self.cmb_att_terrain.currentIndexChanged.connect(self._queue)
@@ -276,9 +322,9 @@ class MainWindow(QWidget):
         b2.addWidget(self.lbl_staging)
         lay.addWidget(card2)
 
-        self.card_plan = card3 = Card("Plan", "attack")
+        self.card_plan = card3 = Card(_("Plan"), "attack")
         b3 = card3.body()
-        self.lbl_plan_field = _label("Ile jednostek zamierzasz wysłać")
+        self.lbl_plan_field = _label(_("Ile jednostek zamierzasz wysłać"))
         b3.addWidget(self.lbl_plan_field)
         self.spn_planned = QSpinBox()
         self.spn_planned.setRange(1, 200)
@@ -300,17 +346,17 @@ class MainWindow(QWidget):
         lay.setContentsMargins(0, 0, 10, 0)
         lay.setSpacing(14)
 
-        self.card_group = card = Card("Garnizon", "defend")
+        self.card_group = card = Card(_("Garnizon"), "defend")
         b = card.body()
         head = QWidget()
         hl = QHBoxLayout(head)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(8)
-        hl.addWidget(_label("Jednostka"), 1)
-        lbl_n = _label("Ile")
+        hl.addWidget(_label(_("Jednostka")), 1)
+        lbl_n = _label(_("Ile"))
         lbl_n.setFixedWidth(62)
         hl.addWidget(lbl_n)
-        lbl_v = _label("Stopień")
+        lbl_v = _label(_("Stopień"))
         lbl_v.setFixedWidth(96)
         hl.addWidget(lbl_v)
         b.addWidget(head)
@@ -319,50 +365,50 @@ class MainWindow(QWidget):
             r = DefenderRow(self._queue)
             self.def_rows.append(r)
             b.addWidget(r)
-        self.lbl_group_hint = _hint("Ustaw liczbę 0, żeby pominąć dany typ.")
+        self.lbl_group_hint = _hint(_("Ustaw liczbę 0, żeby pominąć dany typ."))
         b.addWidget(self.lbl_group_hint)
         lay.addWidget(card)
 
-        self.card_city = card2 = Card("Miasto i teren", "defend")
+        self.card_city = card2 = Card(_("Miasto i teren"), "defend")
         b2 = card2.body()
-        self.lbl_city_terrain = _label("Teren pod miastem")
+        self.lbl_city_terrain = _label(_("Teren pod miastem"))
         b2.addWidget(self.lbl_city_terrain)
         self.cmb_def_terrain = _combo(12)
         self.cmb_def_terrain.currentIndexChanged.connect(self._queue)
         b2.addWidget(self.cmb_def_terrain)
 
-        self.chk_city = QCheckBox("Obrońcy stoją w mieście")
+        self.chk_city = QCheckBox(_("Obrońcy stoją w mieście"))
         self.chk_city.setObjectName("ChkCity")
         self.chk_city.setChecked(True)
         self.chk_city.stateChanged.connect(self._queue)
         b2.addWidget(self.chk_city)
 
-        b2.addWidget(_label("Wielkość miasta"))
+        b2.addWidget(_label(_("Wielkość miasta")))
         self.spn_size = QSpinBox()
         self.spn_size.setRange(1, 40)
         self.spn_size.setValue(8)
         self.spn_size.valueChanged.connect(self._queue)
         b2.addWidget(self.spn_size)
 
-        self.chk_fort = QCheckBox("Obrońcy okopani (fortify)")
+        self.chk_fort = QCheckBox(_("Obrońcy okopani (fortify)"))
         self.chk_fort.setChecked(True)
         self.chk_fort.stateChanged.connect(self._queue)
         b2.addWidget(self.chk_fort)
 
-        b2.addWidget(_label("Ulepszenia kafla"))
+        b2.addWidget(_label(_("Ulepszenia kafla")))
         self.box_extras = QWidget()
         self.lay_extras = QGridLayout(self.box_extras)
         self.lay_extras.setContentsMargins(0, 0, 0, 0)
         self.lay_extras.setSpacing(2)
         b2.addWidget(self.box_extras)
 
-        b2.addWidget(_label("Ustrój obrońcy"))
+        b2.addWidget(_label(_("Ustrój obrońcy")))
         self.cmb_gov = _combo(10)
         self.cmb_gov.currentIndexChanged.connect(self._queue)
         b2.addWidget(self.cmb_gov)
         lay.addWidget(card2)
 
-        self.card_blds = card3 = Card("Budowle i cuda obrońcy", "defend")
+        self.card_blds = card3 = Card(_("Budowle i cuda obrońcy"), "defend")
         b3 = card3.body()
         self.box_buildings = QWidget()
         self.lay_buildings = QGridLayout(self.box_buildings)
@@ -373,16 +419,16 @@ class MainWindow(QWidget):
                            "wybranego zestawu reguł."))
         lay.addWidget(card3)
 
-        card4 = Card("Założenia obliczeń")
+        card4 = Card(_("Założenia obliczeń"))
         b4 = card4.body()
-        self.chk_barracks = QCheckBox("Obrońcy budowani w tym mieście")
+        self.chk_barracks = QCheckBox(_("Obrońcy budowani w tym mieście"))
         self.chk_barracks.setChecked(True)
         self.chk_barracks.stateChanged.connect(self._queue)
         b4.addWidget(self.chk_barracks)
         self.lbl_barracks_hint = _hint(
-            "Stopień weterana wynika wtedy z koszar i cudów w tym mieście.")
+            _("Stopień weterana wynika wtedy z koszar i cudów w tym mieście."))
         b4.addWidget(self.lbl_barracks_hint)
-        self.chk_promo = QCheckBox("Obrońcy awansują po wygranej obronie")
+        self.chk_promo = QCheckBox(_("Obrońcy awansują po wygranej obronie"))
         self.chk_promo.setChecked(True)
         self.chk_promo.stateChanged.connect(self._queue)
         b4.addWidget(self.chk_promo)
@@ -408,15 +454,15 @@ class MainWindow(QWidget):
 
         tiles = QHBoxLayout()
         tiles.setSpacing(10)
-        self.tile_need = StatTile("potrzeba (90%)")
-        self.tile_loss = StatTile("średnie straty")
-        self.tile_cost = StatTile("koszt strat")
+        self.tile_need = StatTile(_("potrzeba (90%)"))
+        self.tile_loss = StatTile(_("średnie straty"))
+        self.tile_cost = StatTile(_("koszt strat"))
         self.tile_duel = StatTile("pojedynek")
         for t in (self.tile_need, self.tile_loss, self.tile_cost, self.tile_duel):
             tiles.addWidget(t)
         lay.addLayout(tiles)
 
-        scale_card = Card("Starcie jednostka na jednostkę")
+        scale_card = Card(_("Starcie jednostka na jednostkę"))
         self.scale = PowerScale()
         scale_card.body().addWidget(self.scale)
         self.lbl_fp = _hint("")
@@ -431,10 +477,10 @@ class MainWindow(QWidget):
         cp = QVBoxLayout(chart_page)
         cp.setContentsMargins(0, 8, 0, 0)
         cp.addWidget(self.chart)
-        self.tabs.addTab(chart_page, "Szansa zdobycia")
+        self.tabs.addTab(chart_page, _("Szansa zdobycia"))
 
         self.breakdown_page = self._build_breakdown_page()
-        self.tabs.addTab(self.breakdown_page, "Rozbicie sił")
+        self.tabs.addTab(self.breakdown_page, _("Rozbicie sił"))
 
         self.tbl_units = self._make_table(
             ["Jednostka", "1 na 1", "Potrzeba", "Straty", "Koszt strat",
@@ -444,18 +490,18 @@ class MainWindow(QWidget):
         up.setContentsMargins(0, 8, 0, 0)
         up.setSpacing(8)
         self.chk_occupiers = QCheckBox(
-            "Tylko jednostki, które mogą samodzielnie zająć miasto")
+            _("Tylko jednostki, które mogą samodzielnie zająć miasto"))
         self.chk_occupiers.setChecked(True)
         self.chk_occupiers.stateChanged.connect(self._on_rank_filter)
         up.addWidget(self.chk_occupiers)
         up.addWidget(self.tbl_units)
-        self.tabs.addTab(units_page, "Czym uderzyć")
+        self.tabs.addTab(units_page, _("Czym uderzyć"))
 
         self.tbl_terrain = self._make_table(
             ["Kafel wypadowy", "Wejście na kafel", "Twoja obrona",
              "Ryzyko kontrataku"])
         self.page_terrain = self._wrap_table(self.tbl_terrain)
-        self.tabs.addTab(self.page_terrain, "Skąd atakować")
+        self.tabs.addTab(self.page_terrain, _("Skąd atakować"))
 
         # strony uzywane tylko w trybie obrony
         self.tbl_defenders = self._make_table(
@@ -484,11 +530,11 @@ class MainWindow(QWidget):
         gp.setSpacing(8)
         grow = QHBoxLayout()
         grow.setSpacing(8)
-        self.btn_load_save = QPushButton("Wczytaj najnowszy zapis")
+        self.btn_load_save = QPushButton(_("Wczytaj najnowszy zapis"))
         self.btn_load_save.setObjectName("Primary")
         self.btn_load_save.clicked.connect(self._on_load_save)
         grow.addWidget(self.btn_load_save)
-        self.chk_cheat = QCheckBox("Pełny wgląd — świadomie chituję")
+        self.chk_cheat = QCheckBox(_("Pełny wgląd — świadomie chituję"))
         self.chk_cheat.setToolTip(
             "Wyłączone: widzisz tylko to, co wie twoja cywilizacja (własne miasta "
             "i wojska, odkryte miasta obcych).\n"
@@ -498,7 +544,7 @@ class MainWindow(QWidget):
         grow.addWidget(self.chk_cheat)
         grow.addStretch(1)
         gp.addLayout(grow)
-        self.lbl_game = QLabel("Nie wczytano zapisu.")
+        self.lbl_game = QLabel(_("Nie wczytano zapisu."))
         self.lbl_game.setObjectName("Hint")
         self.lbl_game.setWordWrap(True)
         self.lbl_game.setTextFormat(Qt.RichText)
@@ -515,7 +561,7 @@ class MainWindow(QWidget):
         self.lbl_tips.setAlignment(Qt.AlignTop)
         tp.addWidget(self.lbl_tips)
         tp.addStretch(1)
-        self.tabs.addTab(self.tips_page, "Wskazówki")
+        self.tabs.addTab(self.tips_page, _("Wskazówki"))
 
         lay.addWidget(self.tabs, 1)
         return col
@@ -526,12 +572,12 @@ class MainWindow(QWidget):
         lay.setContentsMargins(0, 10, 0, 0)
         lay.setSpacing(12)
 
-        left = Card("Atak")
+        left = Card(_("Atak"))
         self.bars_att = ModifierBars()
         left.body().addWidget(self.bars_att)
         left.body().addStretch(1)
 
-        right = Card("Obrona")
+        right = Card(_("Obrona"))
         self.bars_def = ModifierBars()
         right.body().addWidget(self.bars_def)
         self.lbl_def_detail = _hint("")
@@ -624,35 +670,35 @@ class MainWindow(QWidget):
     def _apply_mode(self) -> None:
         """Przestawia napisy i zakladki pod wybrany tryb."""
         atk = self.mode == MODE_ATTACK
-        self.card_solo.set_title("Atakujący" if atk else "Mój obrońca",
+        self.card_solo.set_title(_("Atakujący") if atk else _("Mój obrońca"),
                                  "attack" if atk else "defend")
-        self.card_staging.set_title("Skąd atakujesz" if atk else "Skąd naciera wróg",
+        self.card_staging.set_title(_("Skąd atakujesz") if atk else _("Skąd naciera wróg"),
                                     "attack" if atk else "defend")
-        self.card_plan.set_title("Plan" if atk else "Plan obrony",
+        self.card_plan.set_title(_("Plan") if atk else _("Plan obrony"),
                                  "attack" if atk else "defend")
-        self.card_group.set_title("Garnizon wroga" if atk else "Siły wroga",
+        self.card_group.set_title(_("Garnizon wroga") if atk else _("Siły wroga"),
                                   "defend" if atk else "attack")
-        self.card_city.set_title("Miasto wroga i teren" if atk else "Moje miasto",
+        self.card_city.set_title(_("Miasto wroga i teren") if atk else _("Moje miasto"),
                                  "defend" if atk else "defend")
-        self.card_blds.set_title("Budowle i cuda obrońcy" if atk
-                                 else "Moje budowle i cuda", "defend")
-        self.lbl_solo_unit.setText("Jednostka szturmowa" if atk
-                                   else "Jednostka obronna")
-        self.lbl_staging_field.setText("Teren jednostki szturmowej" if atk
-                                       else "Teren, z którego wróg naciera")
-        self.lbl_plan_field.setText("Ile jednostek zamierzasz wysłać" if atk
-                                    else "Ilu obrońców zostawiasz")
-        self.lbl_city_terrain.setText("Teren pod miastem")
-        self.chk_city.setText("Obrońcy stoją w mieście" if atk
-                              else "Bronię się w mieście")
+        self.card_blds.set_title(_("Budowle i cuda obrońcy") if atk
+                                 else _("Moje budowle i cuda"), "defend")
+        self.lbl_solo_unit.setText(_("Jednostka szturmowa") if atk
+                                   else _("Jednostka obronna"))
+        self.lbl_staging_field.setText(_("Teren jednostki szturmowej") if atk
+                                       else _("Teren, z którego wróg naciera"))
+        self.lbl_plan_field.setText(_("Ile jednostek zamierzasz wysłać") if atk
+                                    else _("Ilu obrońców zostawiasz"))
+        self.lbl_city_terrain.setText(_("Teren pod miastem"))
+        self.chk_city.setText(_("Obrońcy stoją w mieście") if atk
+                              else _("Bronię się w mieście"))
         self.lbl_group_hint.setText(
-            "Ustaw liczbę 0, żeby pominąć dany typ." if atk else
-            "Wpisz siły, którymi wróg uderzy w jednej turze.")
+            _("Ustaw liczbę 0, żeby pominąć dany typ.") if atk else
+            _("Wpisz siły, którymi wróg uderzy w jednej turze."))
         self.chk_barracks.setVisible(not atk)
         self.lbl_barracks_hint.setVisible(not atk)
-        self.tile_need.set_label("potrzeba (90%)" if atk else "obrońców (95%)")
-        self.tile_loss.set_label("średnie straty" if atk else "straty wroga")
-        self.tile_cost.set_label("koszt strat" if atk else "zatrzyma")
+        self.tile_need.set_label(_("potrzeba (90%)") if atk else _("obrońców (95%)"))
+        self.tile_loss.set_label(_("średnie straty") if atk else _("straty wroga"))
+        self.tile_cost.set_label(_("koszt strat") if atk else "zatrzyma")
         self.tile_duel.set_label("pojedynek" if atk else "utrzymanie")
         self.wrap_moves.setVisible(atk and bool(self._rs)
                                    and self._rs.combat.tired_attack)
@@ -661,16 +707,16 @@ class MainWindow(QWidget):
         current = self.tabs.tabText(self.tabs.currentIndex())
         while self.tabs.count():
             self.tabs.removeTab(0)
-        pages = [(self.chart_page, "Szansa zdobycia" if atk else "Szansa utrzymania"),
-                 (self.breakdown_page, "Rozbicie sił")]
+        pages = [(self.chart_page, _("Szansa zdobycia") if atk else _("Szansa utrzymania")),
+                 (self.breakdown_page, _("Rozbicie sił"))]
         if atk:
-            pages.append((self.units_page, "Czym uderzyć"))
-            pages.append((self.page_terrain, "Skąd atakować"))
+            pages.append((self.units_page, _("Czym uderzyć")))
+            pages.append((self.page_terrain, _("Skąd atakować")))
         else:
-            pages.append((self.page_defenders, "Czym bronić"))
-            pages.append((self.page_resilience, "Wytrzymałość"))
-        pages.append((self.game_page, "Bieżąca partia"))
-        pages.append((self.tips_page, "Wskazówki"))
+            pages.append((self.page_defenders, _("Czym bronić")))
+            pages.append((self.page_resilience, _("Wytrzymałość")))
+        pages.append((self.game_page, _("Bieżąca partia")))
+        pages.append((self.tips_page, _("Wskazówki")))
         for page, title in pages:
             page.setVisible(True)
             self.tabs.addTab(page, title)
@@ -740,6 +786,10 @@ class MainWindow(QWidget):
 
     def _known_techs(self) -> set[str] | None:
         assert self._rs
+        # zapis gry jest wazniejszy niz suwak: badania potrafia wyprzedzac epoke
+        over = getattr(self, "_tech_override", None)
+        if over:
+            return set(over)
         depth = self.sld_tech.value()
         if depth >= self._rs.max_tech_depth():
             return None
@@ -770,10 +820,46 @@ class MainWindow(QWidget):
         defenders = sorted([u for u in avail if u.defense > 0],
                            key=lambda u: (rs.unit_tech_depth(u), u.name))
 
-        depth = self.sld_tech.value()
-        self.lbl_tech.setText(
-            f"próg {depth} · {len(avail)} jednostek" if known is not None
-            else f"pełne drzewo · {len(avail)} jednostek")
+        over = getattr(self, "_tech_override", None)
+        if over:
+            depths = sorted(rs.tech_depth(t) for t in over) or [0]
+            depth = depths[len(depths) // 2]
+            czolo = depths[-1]
+        else:
+            depth = self.sld_tech.value()
+            czolo = depth
+        era = rs.era_at(depth)
+        nxt = next((e for e in rs.eras() if e["prog"] > czolo), None)
+        self.lbl_era.setText(era["nazwa"] + (" · z zapisu" if over else ""))
+        blds = [b for b in rs.buildings.values()
+                if known is None or all(t in known for t in b.req_techs())]
+        wonders = sum(1 for b in blds if b.is_wonder)
+        parts = [f"{len(over)} tech" if over else
+                 (f"próg {depth}" if known is not None else "całe drzewo"),
+                 f"{len(avail)} jedn", f"{len(blds) - wonders} bud",
+                 f"{wonders} cud"]
+        if nxt:
+            parts.append(f"→ {nxt['nazwa']}")
+        self.lbl_tech.setText(" · ".join(parts))
+        tip = [f"<b>{era['nazwa']}</b>"]
+        if over:
+            czolowa = max(over, key=rs.tech_depth)
+            tip.append(f"filtr z <i>Twojego</i> drzewa technologii ({len(over)} "
+                       f"zbadanych, najgłębsza: {czolowa})")
+            tip.append("suwak jest wyłączony — narzędzie "
+                       "<i>moje_technologie</i> steruje filtrem")
+        if era.get("technologia"):
+            tip.append(f"otwiera ją technologia <i>{era['technologia']}</i>")
+        fresh = rs.unlocked_at(depth)
+        for key, label in (("jednostki", "jednostki"), ("budynki", "budynki"),
+                           ("cuda", "cuda")):
+            if fresh[key]:
+                tip.append(f"nowe {label} na tym progu: "
+                           + ", ".join(fresh[key][:8]))
+        self.lbl_era.setToolTip("<br>".join(tip))
+        self.sld_tech.setEnabled(not over)
+        self.sld_tech.setToolTip("<br>".join(
+            [f"{e['prog']:>3} — {e['nazwa']}" for e in rs.eras()]))
 
         atk = self.mode == MODE_ATTACK
         # w trybie szturmu pojedyncza karta to moja jednostka atakujaca,
@@ -870,7 +956,7 @@ class MainWindow(QWidget):
             self.chk_extras[e.name] = cb
             self.lay_extras.addWidget(cb, i // 2, i % 2)
         if not extras:
-            self.lay_extras.addWidget(_hint("brak w tym zestawie reguł"), 0, 0)
+            self.lay_extras.addWidget(_hint(_("brak w tym zestawie reguł")), 0, 0)
 
     def _populate_buildings(self) -> None:
         assert self._rs
@@ -1190,7 +1276,7 @@ class MainWindow(QWidget):
                 seen_x.add(idx)
                 marks.append((idx, float(cdf[idx]), label))
         self.chart.set_data(cdf, marks, min(planned, top))
-        self.chart.set_axis_label("liczba obrońców w mieście")
+        self.chart.set_axis_label(_("liczba obrońców w mieście"))
 
     def _update_defense_staging(self, rs, enemy, ut, vet, sit) -> None:
         """Kafel wroga: nie zmienia jego ataku, ale decyduje o wypadzie."""
@@ -1373,7 +1459,7 @@ class MainWindow(QWidget):
             x = res.attacks_for(conf)
             if x is not None:
                 marks.append((x, float(res.p_success_by_attacks[x]), label))
-        self.chart.set_axis_label("liczba atakujących jednostek")
+        self.chart.set_axis_label(_("liczba atakujących jednostek"))
         self.chart.set_data(res.p_success_by_attacks, marks, self.spn_planned.value())
 
     def _update_breakdown(self, d) -> None:
@@ -1465,7 +1551,7 @@ class MainWindow(QWidget):
             self._render_game_panel(self._intel.summary(self._intel_full))
 
     def _on_load_save(self) -> None:
-        self.lbl_game.setText("Wczytuję…")
+        self.lbl_game.setText(_("Wczytuję…"))
         QApplication.processEvents()
         try:
             summary = self.ai_savegame({"pelny_wglad": self.chk_cheat.isChecked()})
@@ -1570,7 +1656,8 @@ class MainWindow(QWidget):
         self.lbl_tips.setText("")
 
 
-def main(control: bool = False) -> int:
+def main(control: bool = False, lang: str | None = None) -> int:
+    i18n.set_language(i18n.normalize(lang or os.environ.get("FCSIEGE_LANG")))
     app = QApplication(sys.argv)
     app.setApplicationName("FCSiege")
     font = QFont()
@@ -1922,8 +2009,19 @@ def _intel_ruleset(self):
     return self._rs
 
 
+def _intel_tech_filter_changed(self) -> None:
+    """Filtr technologii zmienil zrodlo (suwak <-> drzewo z zapisu)."""
+    if not self._rs:
+        return
+    self._loading = True
+    self._populate_units(keep=True)
+    self._loading = False
+    self._rank_cache_valid = False
+    self._queue()
+
+
 def _install_ai_bridge() -> None:
-    """Doklejа metody mostu do MainWindow (trzymane osobno dla czytelnosci)."""
+    """Dokleja metody mostu do MainWindow (trzymane osobno dla czytelnosci)."""
     MainWindow.ai_run_tool = _ai_run_tool
     MainWindow.ai_context_note = _ai_context_note
     MainWindow.ai_snapshot = _ai_snapshot
@@ -1935,9 +2033,13 @@ def _install_ai_bridge() -> None:
     MainWindow.ai_unit = _ai_unit
     MainWindow._intel_apply_ruleset = _intel_apply_ruleset
     MainWindow._intel_ruleset = _intel_ruleset
+    MainWindow._intel_tech_filter_changed = _intel_tech_filter_changed
     # narzedzia wywiadu sa wspolne dla okna i trybu bez Qt
     for _name in ("_load_save", "_need_intel", "ai_savegame", "ai_army",
-                  "ai_nation", "ai_front", "ai_governments", "ai_reach", "ai_cities", "ai_disband", "ai_trade"):
+                  "ai_nation", "ai_front", "ai_governments", "ai_reach",
+                  "ai_cities", "ai_disband", "ai_trade", "ai_eras",
+                  "ai_techs", "ai_corruption", "ai_build_plan",
+                  "_set_tech_override"):
         setattr(MainWindow, _name, getattr(IntelMixin, _name))
     MainWindow._intel = None
     MainWindow._intel_full = False
