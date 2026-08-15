@@ -19,6 +19,7 @@ import collections
 import os
 from dataclasses import dataclass, field
 
+from .model import clean_name
 from .registry import parse_file
 
 DEFAULT_SAVE_DIRS = [
@@ -293,6 +294,20 @@ class TerrainMap:
         except ValueError:
             return False
 
+    def owner(self, x: int, y: int) -> int | None:
+        """Numer wlasciciela kafla albo None dla ziemi niczyjej."""
+        cache = getattr(self, "_owner_rows", None)
+        if cache is None:
+            cache = self._owner_rows = {}
+        if y not in cache:
+            raw = str(self._m.get(f"owner{y:04d}") or "")
+            cache[y] = raw.split(",") if raw else []
+        row = cache[y]
+        if not (0 <= x < len(row)):
+            return None
+        cell = row[x].strip()
+        return None if cell in ("", "-") else int(cell)
+
     def has_road(self, x: int, y: int) -> bool:
         """Droga, kolej, maglev albo rzeka - wszystkie sa 'NativeTile'."""
         return any(self.has_extra(n, x, y)
@@ -381,6 +396,95 @@ def road_link(rs, tmap: TerrainMap, passable, start: tuple[int, int],
             "kafle": todo,
             "robotnikow_na_jedna_ture": total,
             "przy_8_robotnikach_tur": max(1, -(-total // 8)) if total else 0}
+
+
+
+def march_turns(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
+                start: tuple[int, int], goal: tuple[int, int],
+                max_nodes: int = 60000, blocked=None) -> int | None:
+    """Ile tur marszu z A do B - po koszcie ruchu, nie po odleglosci.
+
+    Freeciv liczy ruch w ulamkach (SINGLE_MOVE = move_fragments). Wejscie na
+    kafel kosztuje `movement_cost` pelnych ruchow, chyba ze oba kafle lacz
+    drogi - wtedy placi sie `move_cost` drogi w ulamkach. Koszt jest ograniczony
+    do pelnego zapasu jednostki, a jednostka z choc jednym ulamkiem zawsze moze
+    wykonac jeden ruch (i konczy ture z zerem).
+
+    Zwraca liczbe tur albo None, gdy cel jest nieosiagalny dla tej klasy.
+    """
+    import heapq
+
+    single = max(1, rs.move_fragments)
+    full = max(1, ut.move_rate) * single
+    uclass = rs.uclass_of(ut)
+    road_cost = _road_move_costs(rs)
+
+    def enter_cost(frm: tuple[int, int], to: tuple[int, int]) -> int | None:
+        name = tmap.terrain(*to)
+        terr = rs.terrains.get(name) if name else None
+        if terr is None:
+            return None
+        native = uclass.name in terr.native_to
+        # ulepszenie liniowe laczace oba kafle zastepuje koszt terenu
+        best = None
+        for extra, cost in road_cost.items():
+            if tmap.has_extra(extra, *frm) and tmap.has_extra(extra, *to):
+                best = cost if best is None else min(best, cost)
+        if best is None and not native:
+            return None                    # klasa tu nie wejdzie
+        if blocked is not None and to != goal and blocked(*to):
+            return None                    # np. cudze terytorium przy pokoju
+        if best is None:
+            best = max(1, terr.movement_cost) * single
+        return min(best, full)
+
+    # stan: (tury, zuzyte_w_tej_turze) - minimalizujemy leksykograficznie
+    start_state = (0, 0)
+    best: dict[tuple[int, int], tuple[int, int]] = {start: start_state}
+    pq = [(0, 0, start)]
+    seen = 0
+    while pq and seen < max_nodes:
+        turns, used, node = heapq.heappop(pq)
+        seen += 1
+        if node == goal:
+            return turns
+        if (turns, used) > best.get(node, (1 << 30, 0)):
+            continue
+        left = full - used
+        for nb in geom.neighbours(*node):
+            cost = enter_cost(node, nb)
+            if cost is None:
+                continue
+            if left >= cost:
+                nt, nu = turns, used + cost
+            elif left > 0:
+                nt, nu = turns, full        # ostatni ruch za resztke
+            else:
+                nt, nu = turns + 1, min(cost, full)
+            if (nt, nu) < best.get(nb, (1 << 30, 0)):
+                best[nb] = (nt, nu)
+                heapq.heappush(pq, (nt, nu, nb))
+    return None
+
+
+def _road_move_costs(rs) -> dict[str, int]:
+    """Koszt ruchu po ulepszeniach liniowych, w ulamkach - wprost z regul."""
+    cached = getattr(rs, "_road_move_costs", None)
+    if cached is not None:
+        return cached
+    import os
+
+    from .registry import parse_file
+    out: dict[str, int] = {}
+    path = os.path.join(rs.path, "terrain.ruleset")
+    if os.path.exists(path):
+        reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+        for sec in reg.prefixed("road_"):
+            extra = clean_name(sec.str("extra")) or clean_name(sec.str("name"))
+            if extra:
+                out[extra] = max(0, sec.int("move_cost"))
+    rs._road_move_costs = out
+    return out
 
 
 def regions(tmap: TerrainMap, passable,
@@ -725,6 +829,7 @@ class Intel:
                 garrison[(u.x, u.y)] += 1
 
         # --- cele
+        tmap = TerrainMap(s)
         cele = []
         for slot, nation in slots.items():
             sec = s._sections.get(slot)
@@ -737,12 +842,23 @@ class Intel:
             for r in (tbl.dicts() if tbl else []):
                 x, y = int(r.get("x") or 0), int(r.get("y") or 0)
                 blds = set(s._bits(r.get("improvements")))
+                # zasieg liczymy KOSZTEM RUCHU, nie odlegloscia: wzgorza i las
+                # kosztuja podwojnie, drogi prawie nic, a przy pokoju wojsko
+                # w ogole nie wejdzie na cudze terytorium (movement.c: MR_PEACE)
                 w_zasiegu = 0
                 najblizej = None
+                marsz = None
                 for u, ut in mine_units:
                     d = self.geom.real_distance((x, y), (u.x, u.y))
                     najblizej = d if najblizej is None else min(najblizej, d)
-                    if d <= max(1, ut.move_rate) * tury:
+                    if d > max(1, ut.move_rate) * (tury + 2) + 2:
+                        continue          # zbyt daleko, zeby liczyc sciezke
+                    t_marsz = march_turns(rs, tmap, self.geom, ut,
+                                          (u.x, u.y), (x, y), max_nodes=8000)
+                    if t_marsz is None:
+                        continue
+                    marsz = t_marsz if marsz is None else min(marsz, t_marsz)
+                    if t_marsz < tury:
                         w_zasiegu += 1
                 rozmiar = int(r.get("size") or 0)
                 cele.append({
@@ -757,8 +873,10 @@ class Intel:
                     "buduje": str(r.get("currently_building_name") or ""),
                     "moich_w_zasiegu": w_zasiegu,
                     "najblizszy_dystans": najblizej,
+                    "tur_marszu": marsz,
                 })
-        cele.sort(key=lambda c: (c["obroncow"], c["najblizszy_dystans"] or 99))
+        cele.sort(key=lambda c: (c["obroncow"],
+                                 99 if c["tur_marszu"] is None else c["tur_marszu"]))
 
         # --- koszt szczescia: ktore miasta wisza na stanie wojennym
         base = self._city_effect(rs, "City_Unhappy_Size", "", set(), gov,

@@ -364,6 +364,7 @@ KEYS: dict[str, str] = {
     "jednostek": "units", "wolno_bez_kosztu": "free_of_charge",
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
+    "tur_marszu": "march_turns",
     "cel_wojny": "war_target", "tury_zasiegu": "reach_turns",
     "moje_jednostki_bojowe": "my_combat_units", "cele": "targets",
     "podsumowanie_celow": "target_summary", "miast_lacznie": "cities_total",
