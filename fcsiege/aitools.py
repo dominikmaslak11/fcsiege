@@ -300,6 +300,29 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "gotowosc_wojenna",
+        "description": (
+            "Odpowiada na pytanie „uderzać teraz czy czekać” liczbami, nie "
+            "opinią. Dla wskazanych nacji zbiera stan każdego ich miasta "
+            "(mury, garnizon, co buduje), liczy, ile Twoich jednostek dojdzie "
+            "tam w zadanej liczbie tur po realnej geometrii mapy, oraz ile "
+            "kosztuje szczęście wymarsz garnizonów — bo stan wojenny znika "
+            "razem z wojskiem. Pokazuje też, co zmieni zwłoka: które miasta "
+            "wroga stawiają mury, a które produkują osadników."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nacje": {"type": "array", "items": {"type": "string"},
+                          "description": "nacje, z którymi planujesz wojnę"},
+                "tury": {"type": "integer",
+                         "description": "ile tur marszu liczyć (domyślnie 2)"},
+            },
+            "required": ["nacje"],
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "plan_budowy",
         "description": (
             "Dzieli miasta na metropolię i kolonie i mówi, co gdzie budować, "
@@ -512,6 +535,7 @@ TOOL_METHOD = {
     "moje_technologie": "ai_techs",
     "korupcja": "ai_corruption",
     "plan_budowy": "ai_build_plan",
+    "gotowosc_wojenna": "ai_war_readiness",
 }
 
 
@@ -609,6 +633,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_corruption(dict(args))
     if name == "plan_budowy":
         return bridge.ai_build_plan(dict(args))
+    if name == "gotowosc_wojenna":
+        return bridge.ai_war_readiness(dict(args))
     return {"blad": f"{i18n._('nieznane narzędzie')}: {name}"}
 
 

@@ -15,6 +15,7 @@ parametrem pelny_wglad=True. Kazda odpowiedz mowi, w ktorym trybie powstala.
 from __future__ import annotations
 
 import glob
+import collections
 import os
 from dataclasses import dataclass, field
 
@@ -686,6 +687,199 @@ class Intel:
         out["garnizony"] = garrisons
         return out
 
+
+
+    # ------------------------------------------------------- gotowosc wojenna
+
+    def war_readiness(self, rs, nations: list[str], tury: int = 2) -> dict:
+        """Czy uderzac teraz, czy czekac - liczby, nie opinia.
+
+        Zbiera cztery rzeczy, ktore o tym decyduja, i kazda liczy z regul albo
+        z zapisu: stan celow (mury, garnizony, co budują), zasieg wlasnych
+        wojsk (realny ruch po heksie), koszt szczescia przy wymarszu garnizonow
+        oraz to, co zmieni sie, jesli poczekasz.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        gov = s.me.government or ""
+        techs = _known_techs(s) - {"A_NONE"}
+
+        chcemy = {n.lower() for n in nations}
+        slots = {slot: p.nation for slot, p in s.players.items()
+                 if p.nation and p.nation.lower() in chcemy}
+        if not slots:
+            return {"blad": "nie znam tych nacji",
+                    "dostepne": sorted(p.nation for p in s.players.values() if p.nation)}
+
+        # --- moje jednostki bojowe i ich zasieg
+        mine_units = []
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and ut.attack > 0 and "NonMil" not in ut.flags:
+                mine_units.append((u, ut))
+        garrison = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                garrison[(u.x, u.y)] += 1
+
+        # --- cele
+        cele = []
+        for slot, nation in slots.items():
+            sec = s._sections.get(slot)
+            tbl = sec.table("c") if sec else None
+            wojska = collections.Counter()
+            for u in s.units_of(slot):
+                ut = rs.units.get(u.type)
+                if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                    wojska[(u.x, u.y)] += 1
+            for r in (tbl.dicts() if tbl else []):
+                x, y = int(r.get("x") or 0), int(r.get("y") or 0)
+                blds = set(s._bits(r.get("improvements")))
+                w_zasiegu = 0
+                najblizej = None
+                for u, ut in mine_units:
+                    d = self.geom.real_distance((x, y), (u.x, u.y))
+                    najblizej = d if najblizej is None else min(najblizej, d)
+                    if d <= max(1, ut.move_rate) * tury:
+                        w_zasiegu += 1
+                rozmiar = int(r.get("size") or 0)
+                cele.append({
+                    "nacja": nation,
+                    "miasto": str(r.get("name") or "?"),
+                    "x": x, "y": y,
+                    "rozmiar": rozmiar,
+                    # citytools.c: przy rozmiarze 1 miasto znika zamiast zmienic wlasciciela
+                    "zniknie_przy_zdobyciu": rozmiar <= 1,
+                    "mury": "City Walls" in blds,
+                    "obroncow": wojska.get((x, y), 0),
+                    "buduje": str(r.get("currently_building_name") or ""),
+                    "moich_w_zasiegu": w_zasiegu,
+                    "najblizszy_dystans": najblizej,
+                })
+        cele.sort(key=lambda c: (c["obroncow"], c["najblizszy_dystans"] or 99))
+
+        # --- koszt szczescia: ktore miasta wisza na stanie wojennym
+        base = self._city_effect(rs, "City_Unhappy_Size", "", set(), gov,
+                                 techs, set(), 0)
+        e_base = self._city_effect(rs, "Empire_Size_Base", "", set(), gov,
+                                   techs, set(), 0)
+        e_step = self._city_effect(rs, "Empire_Size_Step", "", set(), gov,
+                                   techs, set(), 0)
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        n_miast = len(rows)
+        kara = 0
+        if e_base > 0 and n_miast > e_base:
+            kara = 1 + ((n_miast - e_base) // e_step if e_step > 0 else 0)
+        zadowolonych_bazowo = max(0, base - kara)
+
+        ml_each = self._city_effect(rs, "Martial_Law_Each", "", set(), gov,
+                                    techs, set(), 0)
+        ml_max = self._city_effect(rs, "Martial_Law_Max", "", set(), gov,
+                                   techs, set(), 0)
+
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+
+        ryzyko = []
+        for r in rows:
+            x, y = int(r.get("x") or 0), int(r.get("y") or 0)
+            size = int(r.get("size") or 0)
+            blds = set(s._bits(r.get("improvements")))
+            z_budynkow = self._city_effect(rs, "Make_Content", "", blds, gov,
+                                           techs, mine_blds, size)
+            wojsk = garrison.get((x, y), 0)
+            ml_teraz = min(wojsk, ml_max) * ml_each if ml_each else 0
+            teraz = zadowolonych_bazowo + z_budynkow + ml_teraz
+            po_wymarszu = zadowolonych_bazowo + z_budynkow
+            ryzyko.append({
+                "miasto": str(r.get("name") or "?"),
+                "rozmiar": size,
+                "garnizon": wojsk,
+                "zadowolonych_teraz": teraz,
+                "zadowolonych_po_wymarszu": po_wymarszu,
+                "niepokrytych_po_wymarszu": max(0, size - po_wymarszu),
+                "ma_swiatynie": "Temple" in blds,
+            })
+        ryzyko.sort(key=lambda c: -c["niepokrytych_po_wymarszu"])
+
+        # jednostki w polu robia niezadowolonych w SWOIM miescie macierzystym;
+        # Make_Content_Mil znosi czesc tego z urzedu
+        unhappy_factor = max(1, self._city_effect(rs, "Unhappy_Factor", "", set(),
+                                                  gov, techs, mine_blds, 0))
+        content_mil = self._city_effect(rs, "Make_Content_Mil", "", set(), gov,
+                                        techs, mine_blds, 0)
+        limit_w_polu = content_mil // unhappy_factor
+        nazwy = {int(r.get("id") or 0): str(r.get("name") or "?") for r in rows}
+        w_polu = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and getattr(ut, "uk_happy", 0) > 0:
+                w_polu[nazwy.get(u.homecity, "(bez miasta macierzystego)")] += 1
+        obciazenie = []
+        for miasto, ile in w_polu.most_common():
+            obciazenie.append({
+                "miasto_macierzyste": miasto,
+                "jednostek": ile,
+                "wolno_bez_kosztu": limit_w_polu,
+                "niezadowolonych_gdy_wszystkie_wyjda":
+                    max(0, ile * unhappy_factor - content_mil),
+            })
+
+        # --- co zmieni czekanie
+        mury_w_budowie = [c["miasto"] for c in cele if c["buduje"] == "City Walls"]
+        osadnicy = [c["miasto"] for c in cele if "Settler" in c["buduje"]]
+
+        puste = [c for c in cele if c["obroncow"] == 0]
+        osiagalne = [c for c in cele if c["moich_w_zasiegu"] > 0]
+        return {
+            "cel_wojny": sorted(slots.values()),
+            "tury_zasiegu": tury,
+            "moje_jednostki_bojowe": len(mine_units),
+            "cele": cele,
+            "podsumowanie_celow": {
+                "miast_lacznie": len(cele),
+                "zniknie_przy_zdobyciu":
+                    [c["miasto"] for c in cele if c["zniknie_przy_zdobyciu"]],
+                "bez_murow": sum(1 for c in cele if not c["mury"]),
+                "bez_garnizonu": len(puste),
+                "obroncow_lacznie": sum(c["obroncow"] for c in cele),
+                "osiagalnych_w_tylu_turach": len(osiagalne),
+            },
+            "koszt_szczescia": {
+                "zasada": (f"{base} zadowolonych z definicji, minus {kara} kary "
+                           f"za {n_miast} miast (próg {e_base}, krok {e_step})"),
+                "zadowolonych_bazowo": zadowolonych_bazowo,
+                "stan_wojenny": (f"{ml_each} za jednostkę, maksymalnie {ml_max}"
+                                 if ml_each else "ten ustrój go nie ma"),
+                "miasta": ryzyko,
+                "miast_z_niedoborem_po_wymarszu":
+                    sum(1 for c in ryzyko if c["niepokrytych_po_wymarszu"] > 0),
+                "wojsko_w_polu": {
+                    "zasada": (f"każda jednostka w polu robi {unhappy_factor} "
+                               f"niezadowolonych, miasto znosi {content_mil} "
+                               f"z urzędu → {limit_w_polu} jednostek na miasto "
+                               f"macierzyste bez kosztu"),
+                    "limit_na_miasto": limit_w_polu,
+                    "wg_miasta_macierzystego": obciazenie,
+                    "miast_ponad_limit":
+                        sum(1 for x in obciazenie
+                            if x["niezadowolonych_gdy_wszystkie_wyjda"] > 0),
+                },
+                "czego_nie_liczymy": (
+                    "luksusu z podatków — zapis nie zawiera handlu miasta, "
+                    "więc realny margines jest wyższy niż tu pokazany"),
+            },
+            "co_zmieni_czekanie": {
+                "buduja_mury": mury_w_budowie,
+                "buduja_osadnikow": osadnicy,
+                "uwaga": ("każda tura zwłoki to nowe miasta wroga i mury tam, "
+                          "gdzie ich jeszcze nie ma"),
+            },
+        }
 
     # ------------------------------------------------------- korupcja i plan
 
@@ -1734,6 +1928,13 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_war_readiness(self, args: dict) -> dict:
+        nations = args.get("nacje") or args.get("nations") or []
+        if isinstance(nations, str):
+            nations = [nations]
+        return self._need_intel().war_readiness(
+            self._intel_ruleset(), list(nations), int(args.get("tury") or 2))
 
     def ai_build_plan(self, args: dict) -> dict:
         return self._need_intel().build_plan(

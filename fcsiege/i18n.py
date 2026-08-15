@@ -358,6 +358,29 @@ KEYS: dict[str, str] = {
     "wartosc": "value", "wartosci": "values", "warunki": "requirements",
     "czego_nie_wiem": "what_i_do_not_know", "co": "what", "krok": "step",
     "koszt": "cost", "teren": "terrain", "stan": "state", "typ": "type",
+    "zniknie_przy_zdobyciu": "destroyed_if_captured",
+    "wojsko_w_polu": "units_in_the_field", "limit_na_miasto": "limit_per_city",
+    "wg_miasta_macierzystego": "by_home_city", "miasto_macierzyste": "home_city",
+    "jednostek": "units", "wolno_bez_kosztu": "free_of_charge",
+    "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
+    "miast_ponad_limit": "cities_over_the_limit",
+    "cel_wojny": "war_target", "tury_zasiegu": "reach_turns",
+    "moje_jednostki_bojowe": "my_combat_units", "cele": "targets",
+    "podsumowanie_celow": "target_summary", "miast_lacznie": "cities_total",
+    "bez_murow": "without_walls", "bez_garnizonu": "without_garrison",
+    "obroncow_lacznie": "defenders_total",
+    "osiagalnych_w_tylu_turach": "reachable_in_those_turns",
+    "obroncow": "defenders", "moich_w_zasiegu": "mine_within_reach",
+    "najblizszy_dystans": "nearest_distance",
+    "koszt_szczescia": "happiness_cost", "zadowolonych_bazowo": "content_by_default",
+    "stan_wojenny": "martial_law", "garnizon": "garrison",
+    "zadowolonych_teraz": "content_now",
+    "zadowolonych_po_wymarszu": "content_after_march_out",
+    "niepokrytych_po_wymarszu": "uncovered_after_march_out",
+    "ma_swiatynie": "has_temple",
+    "miast_z_niedoborem_po_wymarszu": "cities_short_after_march_out",
+    "co_zmieni_czekanie": "what_waiting_changes", "buduja_mury": "building_walls",
+    "buduja_osadnikow": "building_settlers", "nacje": "nations", "tury": "turns",
     "x": "x", "y": "y",
     # --- argumenty narzedzi
     "czego": "of_what", "limit": "limit", "pelny_wglad": "full_intel",
@@ -469,6 +492,7 @@ TOOL_NAMES: dict[str, str] = {
     "wywiad_o_nacji": "nation_intel",
     "epoki": "eras",
     "plan_budowy": "build_plan",
+    "gotowosc_wojenna": "war_readiness",
     "korupcja": "waste",
     "moje_technologie": "my_technologies",
     "szlaki_handlowe": "trade_routes",
@@ -534,6 +558,15 @@ TOOL_DESC: dict[str, str] = {
         "The list of eras in the current ruleset with the tech-tree step that "
         "opens each one and what becomes available at that step: units, "
         "buildings and wonders.",
+    "gotowosc_wojenna":
+        "Answers \"strike now or wait\" with numbers rather than opinion. For "
+        "the given nations it collects the state of every one of their cities "
+        "(walls, garrison, what it is building), computes how many of your "
+        "units can reach each one within a given number of turns using the "
+        "real map geometry, and prices the happiness cost of the garrisons "
+        "marching out — martial law leaves with the troops. It also shows what "
+        "delay changes: which enemy cities are raising walls and which are "
+        "producing settlers.",
     "plan_budowy":
         "Splits the cities into a metropolis and colonies and says what to "
         "build where, era by era, separating buildings from wonders. The split "

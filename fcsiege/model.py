@@ -104,6 +104,8 @@ class UnitType:
     move_rate: int
     uk_shield: int = 0
     uk_food: int = 0
+    uk_happy: int = 0        # ilu niezadowolonych robi jednostka w polu
+    uk_gold: int = 0
     flags: set[str] = field(default_factory=set)
     roles: set[str] = field(default_factory=set)
     reqs: list[Req] = field(default_factory=list)
@@ -318,6 +320,8 @@ class Ruleset:
                 move_rate=sec.int("move_rate", 1),
                 uk_shield=sec.int("uk_shield"),
                 uk_food=sec.int("uk_food"),
+                uk_happy=sec.int("uk_happy"),
+                uk_gold=sec.int("uk_gold"),
                 flags=set(str(f) for f in sec.list("flags")),
                 roles=set(str(f) for f in sec.list("roles")),
                 reqs=self._reqs_from(sec),
