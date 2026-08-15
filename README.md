@@ -238,6 +238,60 @@ curl -s localhost:8765/policz -H "Authorization: Bearer tajne" \
 Token jest opcjonalny lokalnie, ale wymagany, jeśli wystawiasz `--host` poza
 localhost — serwer ostrzega, gdy tego nie zrobisz.
 
+## Wiele silników: Claude, GPT, Gemini, DeepSeek
+
+Klucze trzyma jeden plik `~/.config/fcsiege/credentials.json` z prawami **0600**.
+Zmienna środowiskowa zawsze ma pierwszeństwo przed plikiem.
+
+```bash
+python3 fcsiege.py klucz              # stan wszystkich dostawców
+python3 fcsiege.py klucz gemini       # klucz czytany przez getpass, nie trafia
+                                      # ani na ekran, ani do historii powłoki
+```
+
+W przeglądarce służy do tego panel **Ustawienia → Modele i klucze**.
+
+| dostawca | protokół | domyślny model |
+|---|---|---|
+| Claude | oficjalne SDK Anthropica | `claude-opus-5` |
+| OpenAI | zgodny `/chat/completions` | `gpt-5` |
+| Gemini | zgodny `/chat/completions` | `gemini-3.1-pro-preview` |
+| DeepSeek | zgodny `/chat/completions` | `deepseek-chat` |
+
+Claude idzie własnym SDK, bo jego protokół niesie bloki myśli, buforowanie
+promptu i serwerowy fallback — spłaszczanie tego do wspólnego mianownika
+byłoby stratą. Pozostała trójka mówi tym samym protokołem, więc obsługuje ją
+**jedna implementacja po HTTP ze standardowej biblioteki**, bez zależności.
+
+Wszystkie cztery prowadzą **pełną pętlę 29 narzędzi**. Dwie rzeczy wyszły
+dopiero na żywym API i są odwzorowane w kodzie:
+
+* OpenAI odrzuca `max_tokens` dla nowszych modeli i wymaga
+  `max_completion_tokens` — stąd pole `token_param` przy dostawcy,
+* Gemini 3.x wymaga **odesłania własnej sygnatury rozumowania**
+  (`extra_content.google.thought_signature`) razem z wywołaniem funkcji;
+  bez tego druga runda kończy się błędem 400.
+
+### Porównanie silników
+
+```
+POST /porownaj   {"tekst": "…"}
+```
+
+To samo pytanie idzie równolegle do wszystkich skonfigurowanych silników,
+a odpowiedzi wracają obok siebie razem z listą użytych narzędzi i liczbami,
+co do których wszystkie się zgadzają. **Świadomie nie wybieramy „najlepszej"
+odpowiedzi automatycznie** — to byłoby udawanie sądu, którego nie ma jak
+uzasadnić. Rozjazd między silnikami jest informacją sam w sobie.
+
+### Bezpieczeństwo kluczy
+
+* Model **nie może** ustawić ani odczytać klucza. Narzędzie `dostawcy` jest
+  wyłącznie do odczytu i pokazuje jedynie, czy klucz istnieje i skąd pochodzi.
+* Klucze przyjmuje wyłącznie `POST /dostawcy/<nazwa>` (za tokenem API) albo
+  wiersz poleceń — nigdy droga, którą model mógłby wywołać.
+* `.gitignore` blokuje `API_Keys.txt`, `*api*key*.txt` i `credentials.json`.
+
 ## Interfejs webowy przez Tailscale
 
 Silnik zostaje na komputerze — tam, gdzie leżą zapisy gry — a telefon jest
@@ -672,6 +726,9 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/i18n.py` | katalogi polski↔angielski dla okna, narzędzi i odpowiedzi |
 | `fcsiege/aitools.py` | definicje narzędzi i prompt systemowy asystenta |
 | `fcsiege/chat.py` | pętla rozmowy z Claude jako generator zdarzeń — bez Qt |
+| `fcsiege/providers.py` | rejestr dostawców i magazyn kluczy (0600) |
+| `fcsiege/openai_chat.py` | pętla narzędziowa dla protokołu OpenAI |
+| `fcsiege/cli_keys.py` | `fcsiege.py klucz` — wpisywanie kluczy przez getpass |
 | `fcsiege/aicreds.py` | poświadczenia do API Anthropica — bez Qt |
 | `fcsiege/aiclient.py` | adapter pętli rozmowy na sygnały Qt (dla okna) |
 | `fcsiege/webui.py` | strona serwowana przez API (telefon w tailnecie) |

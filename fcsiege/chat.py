@@ -50,6 +50,44 @@ def system_prompt(context_note: str = "", lang: str = "pl") -> list[dict]:
              "cache_control": {"type": "ephemeral"}}]
 
 
+def reply(conversation: "Conversation", user_text: str, run_tool,
+          context_note: str = "", should_stop=None, lang: str = "pl",
+          provider: str | None = None):
+    """Rozmowa u wybranego dostawcy; zdarzenia zawsze te same.
+
+    Claude idzie przez wlasne SDK Anthropica, bo jego protokol niesie bloki
+    mysli, buforowanie promptu i serwerowy fallback - splaszczanie tego do
+    wspolnego mianownika byloby strata. Reszta dostawcow mowi protokolem
+    OpenAI i obsluguje ich jedna implementacja po HTTP.
+    """
+    from . import providers
+
+    name = provider or providers.active_provider()
+    spec = providers.PROVIDERS.get(name)
+    if spec is None:
+        yield ("error", f"nie znam dostawcy {name}")
+        return
+    key = providers.resolve(name)
+    if not key.ok:
+        yield ("error", f"{spec.label}: brak klucza — {key.detail}")
+        return
+
+    if spec.protocol == "anthropic":
+        from .aicreds import Credentials, make_client
+        try:
+            client = make_client(Credentials("plik", key.api_key, key.source))
+        except Exception as exc:  # noqa: BLE001
+            yield ("error", f"nie udało się utworzyć klienta: {exc}")
+            return
+        yield from stream_reply(client, conversation, user_text, run_tool,
+                                context_note, should_stop, lang)
+        return
+
+    from .openai_chat import stream_reply as openai_stream
+    yield from openai_stream(spec, key, conversation, user_text, run_tool,
+                             context_note, should_stop, lang)
+
+
 def stream_reply(client, conversation: Conversation, user_text: str,
                  run_tool, context_note: str = "", should_stop=None,
                  lang: str = "pl"):

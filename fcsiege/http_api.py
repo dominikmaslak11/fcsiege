@@ -283,6 +283,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"narzedzia": localized_specs()})
         if path == "/openapi.json":
             return self._send(200, openapi_schema())
+        if path in ("/dostawcy", "/providers"):
+            from . import providers
+            return self._send(200, providers.status())
         if path in ("/analiza", "/analysis"):
             return self._analysis()
         if path in ("/zdarzenia", "/events"):
@@ -313,6 +316,26 @@ class Handler(BaseHTTPRequestHandler):
                     result = {**result, "ostrzezenia": warn}
                 return self._send(200, result)
             return self._call("policz", {})
+
+        if path.startswith(("/dostawcy/", "/providers/")):
+            # Klucze przyjmujemy TYLKO ta droga - nigdy narzedziem, ktore
+            # model moglby wywolac. Klucz nie ma prawa przejsc przez rozmowe.
+            from . import providers
+            name = path.split("/", 2)[2]
+            if name not in providers.PROVIDERS:
+                return self._send(404, {"blad": f"nie znam dostawcy {name}",
+                                        "dostepne": sorted(providers.PROVIDERS)})
+            klucz = str(body.get("klucz") or body.get("key") or "").strip()
+            if body.get("usun") or body.get("delete"):
+                providers.forget_key(name)
+            elif klucz:
+                providers.save_key(name, klucz, str(body.get("model") or ""))
+            if body.get("aktywny") or body.get("active"):
+                providers.set_active(name)
+            return self._send(200, providers.status())
+
+        if path in ("/porownaj", "/compare"):
+            return self._compare(body)
 
         if path in ("/czat", "/chat"):
             return self._chat(body)
@@ -400,6 +423,77 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             WATCH.unsubscribe(q)
 
+    def _compare(self, body: dict) -> None:
+        """To samo pytanie do kilku silnikow naraz, odpowiedzi obok siebie.
+
+        Swiadomie NIE wybieramy "najlepszej" rady automatycznie - to byloby
+        udawanie sadu, ktorego nie ma jak uzasadnic. Pokazujemy natomiast, po
+        jakie narzedzia kazdy silnik siegnal i gdzie odpowiedzi sie schodza,
+        bo rozjazd miedzy nimi jest sam w sobie informacja.
+        """
+        import concurrent.futures
+
+        from . import providers
+        from .chat import Conversation, reply
+
+        text = str(body.get("tekst") or body.get("text") or "").strip()
+        if not text:
+            return self._send(400, {"blad": "puste pytanie"})
+        chce = body.get("dostawcy") or body.get("providers") or None
+        lang = i18n.language()
+
+        kandydaci = [n for n in (chce or providers.PROVIDERS)
+                     if n in providers.PROVIDERS and providers.resolve(n).ok]
+        if not kandydaci:
+            return self._send(503, {"blad": _("Brak klucza API"),
+                                    "podpowiedz": "skonfiguruj choć jednego dostawcę"})
+
+        def zapytaj(nazwa: str) -> dict:
+            conv = Conversation()
+            tekst, narzedzia, blad = [], [], None
+            i18n.set_language(lang)          # watek ma wlasny kontekst
+            try:
+                for ev in reply(conv, text,
+                                lambda n, a: self.engine.call(
+                                    i18n.canonical_tool(n),
+                                    i18n.untranslate_args(a)),
+                                "", None, lang, nazwa):
+                    if ev[0] == "delta":
+                        tekst.append(ev[1])
+                    elif ev[0] == "tool_start":
+                        narzedzia.append(ev[1])
+                    elif ev[0] == "error":
+                        blad = ev[1]
+            except Exception as exc:  # noqa: BLE001
+                blad = f"{type(exc).__name__}: {exc}"
+            return {"dostawca": nazwa,
+                    "model": providers.resolve(nazwa).model,
+                    "odpowiedz": "".join(tekst),
+                    "uzyte_narzedzia": narzedzia,
+                    "blad": blad}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            wyniki = list(pool.map(zapytaj, kandydaci))
+
+        udane = [w for w in wyniki if not w["blad"] and w["odpowiedz"]]
+        wspolne = set.intersection(*[set(w["uzyte_narzedzia"]) for w in udane]) \
+            if udane else set()
+        import re as _re
+        liczby = {w["dostawca"]: set(_re.findall(r"\d[\d\s]{0,12}\d|\d", w["odpowiedz"]))
+                  for w in udane}
+        zgodne = set.intersection(*liczby.values()) if liczby else set()
+        return self._send(200, {
+            "pytanie": text,
+            "odpowiedzi": wyniki,
+            "odpowiedzialo": len(udane),
+            "narzedzia_uzyte_przez_wszystkich": sorted(wspolne),
+            "liczby_zgodne_u_wszystkich": sorted(zgodne)[:12],
+            "jak_czytac": (
+                "nie wybieramy najlepszej odpowiedzi automatycznie — rozjazd "
+                "między silnikami jest informacją sam w sobie; sprawdź, który "
+                "sięgnął po właściwe narzędzie"),
+        })
+
     def _chat(self, body: dict) -> None:
         """Rozmowa z asystentem, strumieniowana jako Server-Sent Events.
 
@@ -407,23 +501,22 @@ class Handler(BaseHTTPRequestHandler):
         dispatchera narzedzi - wiec asystent w przegladarce steruje dokladnie
         tym samym silnikiem, lacznie z otwartym oknem aplikacji, jesli dziala.
         """
-        from . import aicreds
-        from .chat import stream_reply
+        from . import providers
+        from .chat import reply
 
         text = str(body.get("tekst") or body.get("text") or "").strip()
         if not text:
             return self._send(400, {"blad": "puste pytanie"})
 
-        creds = aicreds.detect_credentials()
-        if not creds.ok:
+        dostawca = str(body.get("dostawca") or body.get("provider")
+                       or providers.active_provider())
+        key = providers.resolve(dostawca)
+        if not key.ok:
             return self._send(503, {
                 "blad": _("Brak klucza API"),
-                "podpowiedz": "ANTHROPIC_API_KEY albo ~/.config/fcsiege/credentials.json",
+                "dostawca": dostawca,
+                "podpowiedz": key.detail,
             })
-        try:
-            client = aicreds.make_client(creds)
-        except Exception as exc:  # noqa: BLE001
-            return self._send(503, {"blad": f"{type(exc).__name__}: {exc}"})
 
         sid = str(body.get("sesja") or self.headers.get("X-FCSiege-Session") or "web")
         if body.get("wyczysc") or body.get("clear"):
@@ -463,8 +556,8 @@ class Handler(BaseHTTPRequestHandler):
                                   ensure_ascii=False, default=str)[:1500]
             except Exception:  # noqa: BLE001 - kontekst jest mile widziany, nie konieczny
                 pass
-            for event in stream_reply(client, conversation, text, run_tool,
-                                      note, lambda: broken, lang):
+            for event in reply(conversation, text, run_tool, note,
+                               lambda: broken, lang, dostawca):
                 kind = event[0]
                 if kind in ("delta", "thinking", "error"):
                     ok = emit({"typ": kind, "tekst": event[1]})

@@ -388,7 +388,10 @@ KEYS: dict[str, str] = {
     "daje_zywnosci": "adds_food", "brakuje": "missing", "surowiec": "resource",
     "polowe": "field_work", "przemiana": "terrain_transform",
     "moge_budowac": "can_build", "mam_w_grze": "have_in_game",
-    "dostepne": "available",
+    "dostepne": "available", "aktywny": "active", "dostawca": "provider",
+    "protokol": "protocol", "skad_klucz": "key_source", "ma_klucz": "has_key",
+    "modele": "models", "zmienne_srodowiskowe": "env_vars",
+    "gdzie_wziac_klucz": "where_to_get_a_key", "format_klucza": "key_format",
     "kafel": "tile", "zywnosc_teraz": "food_now", "irygowany": "irrigated",
     "jak_czytac": "how_to_read",
     "alertow": "alerts_count", "krytycznych": "critical", "pilnych": "urgent",
@@ -548,6 +551,7 @@ TOOL_NAMES: dict[str, str] = {
     "mobilnosc": "mobility",
     "alerty": "alerts",
     "uklady_dyplomatyczne": "treaties",
+    "dostawcy": "providers",
     "potencjal_wzrostu": "growth_potential",
     "obrona_miasta": "city_defense",
     "korupcja": "waste",
@@ -623,6 +627,12 @@ TOOL_DESC: dict[str, str] = {
         "tile, what irrigation would add and what transforming the terrain "
         "would add, together with the worker-turns each takes — all read from "
         "terrain.ruleset.",
+    "dostawcy":
+        "Which model providers are configured, which model is selected and "
+        "where the key comes from (environment variable or file). It does NOT "
+        "reveal the keys and cannot set them — keys are entered only in the "
+        "interface settings or with `fcsiege.py klucz`, so that they never pass "
+        "through the conversation.",
     "uklady_dyplomatyczne":
         "What happens to every treaty and when. The distinction that trips "
         "people up most: an ARMISTICE counts down and turns into PEACE by "

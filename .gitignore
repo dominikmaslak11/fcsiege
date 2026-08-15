@@ -9,3 +9,9 @@ venv/
 
 # osobiste analizy partii — nie należą do repozytorium
 plan_produkcji.txt
+
+# klucze API — NIGDY do repozytorium
+API_Keys.txt
+*api*key*.txt
+*API*KEY*.txt
+credentials.json

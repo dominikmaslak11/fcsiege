@@ -28,6 +28,10 @@ def main() -> int:
         return api_main(argv[1:])
 
     from fcsiege.app import main as gui_main
+    if argv and argv[0] in ("klucz", "keys"):
+        from fcsiege.cli_keys import main as keys_main
+        return keys_main(argv[1:])
+
     if argv and argv[0] == "watch":
         from fcsiege.cli_watch import main as watch_main
         return watch_main(argv[1:])

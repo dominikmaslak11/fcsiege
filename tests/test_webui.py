@@ -176,8 +176,11 @@ def test_chat_stream() -> None:
          [text_event("Potrzebujesz "), text_event("13 katapult.")]),
     ]
     fake = FakeClient(turns)
-    saved_detect, saved_make = aicreds.detect_credentials, aicreds.make_client
-    aicreds.detect_credentials = lambda: aicreds.Credentials("plik", "sk-test", "atrapa")
+    # rozmowa idzie przez warstwe dostawcow: klucz bierzemy ze srodowiska,
+    # a sam klient podstawiamy
+    saved_make = aicreds.make_client
+    saved_env = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = "sk-test"
     aicreds.make_client = lambda creds: fake
 
     srv = Server(None)
@@ -220,7 +223,11 @@ def test_chat_stream() -> None:
               f"{len(conv.messages)} wiadomości")
     finally:
         srv.close()
-        aicreds.detect_credentials, aicreds.make_client = saved_detect, saved_make
+        aicreds.make_client = saved_make
+        if saved_env is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = saved_env
 
 
 def test_analysis() -> None:
@@ -256,8 +263,10 @@ def test_analysis() -> None:
 
 def test_chat_without_key() -> None:
     print("\nCzat bez klucza:")
-    saved = aicreds.detect_credentials
-    aicreds.detect_credentials = lambda: aicreds.Credentials("brak", None, "")
+    from fcsiege import providers
+    saved_env = os.environ.pop("ANTHROPIC_API_KEY", None)
+    saved_file = providers.CRED_FILE
+    providers.CRED_FILE = saved_file + ".pusty-test"
     srv = Server(None)
     try:
         srv.post_stream("/czat", {"tekst": "cześć"})
@@ -268,7 +277,82 @@ def test_chat_without_key() -> None:
               exc.code == 503 and "podpowiedz" in body, body.get("blad"))
     finally:
         srv.close()
-        aicreds.detect_credentials = saved
+        providers.CRED_FILE = saved_file
+        if saved_env is not None:
+            os.environ["ANTHROPIC_API_KEY"] = saved_env
+
+
+def test_providers() -> None:
+    print("\nDostawcy modeli i klucze:")
+    from fcsiege import providers
+
+    real = providers.CRED_FILE
+    tmp = real + ".test"
+    providers.CRED_FILE = tmp                      # nie ruszamy pliku użytkownika
+    try:
+        st = providers.status()
+        check("znamy czterech dostawców", len(st["dostawcy"]) == 4,
+              [d["dostawca"] for d in st["dostawcy"]])
+        check("Claude idzie własnym protokołem",
+              providers.PROVIDERS["claude"].protocol == "anthropic")
+        check("reszta protokołem OpenAI",
+              all(providers.PROVIDERS[p].protocol == "openai"
+                  for p in ("openai", "gemini", "deepseek")))
+
+        providers.save_key("deepseek", "sk-TAJNE-TESTOWE", "deepseek-chat")
+        blob = json.dumps(providers.status(), ensure_ascii=False)
+        check("klucz NIE wycieka do status()", "TAJNE-TESTOWE" not in blob)
+        check("resolve widzi zapisany klucz",
+              providers.resolve("deepseek").api_key == "sk-TAJNE-TESTOWE")
+        check("plik ma prawa 0600",
+              oct(os.stat(tmp).st_mode & 0o777) == "0o600",
+              oct(os.stat(tmp).st_mode & 0o777))
+
+        os.environ["DEEPSEEK_API_KEY"] = "sk-ZE-SRODOWISKA"
+        try:
+            k = providers.resolve("deepseek")
+            check("zmienna środowiskowa ma pierwszeństwo przed plikiem",
+                  k.api_key == "sk-ZE-SRODOWISKA" and k.source == "env")
+        finally:
+            del os.environ["DEEPSEEK_API_KEY"]
+
+        providers.forget_key("deepseek")
+        check("usunięcie klucza działa", not providers.resolve("deepseek").ok)
+
+        from fcsiege.openai_chat import tools_for_openai
+        narzedzia = tools_for_openai("pl")
+        check("narzędzia przełożone na format funkcji OpenAI",
+              narzedzia and all(t["type"] == "function"
+                                and "parameters" in t["function"]
+                                for t in narzedzia), len(narzedzia))
+    finally:
+        providers.CRED_FILE = real
+        if os.path.exists(tmp):
+            os.remove(tmp)
+
+
+def test_provider_endpoint() -> None:
+    print("\nPunkt HTTP dostawcow:")
+    srv = Server("tajne")
+    try:
+        _, _, raw = srv.get("/dostawcy")
+        d = json.loads(raw)
+        check("lista dostawców po HTTP", len(d.get("dostawcy", [])) == 4)
+        check("żaden klucz w odpowiedzi",
+              "sk-" not in json.dumps(d).replace("sk-ant-...", "").replace("sk-...", ""))
+        try:
+            urllib.request.urlopen(
+                urllib.request.Request(srv.base + "/dostawcy"), timeout=20)
+            check("lista dostawców wymaga tokenu", False)
+        except urllib.error.HTTPError as exc:
+            check("lista dostawców wymaga tokenu", exc.code == 401)
+        try:
+            srv.post_stream("/dostawcy/nie-ma", {"klucz": "x"})
+            check("nieznany dostawca daje 404", False)
+        except urllib.error.HTTPError as exc:
+            check("nieznany dostawca daje 404", exc.code == 404)
+    finally:
+        srv.close()
 
 
 def test_tailscale() -> None:
@@ -290,6 +374,8 @@ if __name__ == "__main__":
     test_chat_stream()
     test_analysis()
     test_chat_without_key()
+    test_providers()
+    test_provider_endpoint()
     test_tailscale()
 
     print("\n" + "=" * 60)

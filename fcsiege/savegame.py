@@ -3222,6 +3222,11 @@ class IntelMixin:
             self._intel_ruleset(), str(args.get("miasto", "")),
             int(args.get("limit") or 10))
 
+    def ai_providers(self, args: dict) -> dict:
+        """Ktorzy dostawcy sa skonfigurowani - BEZ ujawniania kluczy."""
+        from . import providers
+        return providers.status()
+
     def ai_diplomacy(self, args: dict) -> dict:
         return self._need_intel().diplomacy(self._intel_ruleset())
 

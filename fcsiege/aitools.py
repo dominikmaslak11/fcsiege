@@ -320,6 +320,18 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "dostawcy",
+        "description": (
+            "Którzy dostawcy modeli są skonfigurowani, jaki model jest wybrany "
+            "i skąd pochodzi klucz (zmienna środowiskowa czy plik). NIE ujawnia "
+            "samych kluczy i nie pozwala ich ustawić — klucze wpisuje się "
+            "wyłącznie w ustawieniach interfejsu albo poleceniem "
+            "`fcsiege.py klucz`, żeby nigdy nie przechodziły przez rozmowę."
+        ),
+        "input_schema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
         "name": "uklady_dyplomatyczne",
         "description": (
             "Co się stanie z każdym układem i kiedy. Kluczowe rozróżnienie, "
@@ -633,6 +645,7 @@ TOOL_METHOD = {
     "obrona_miasta": "ai_city_defense",
     "alerty": "ai_alerts",
     "uklady_dyplomatyczne": "ai_diplomacy",
+    "dostawcy": "ai_providers",
     "potencjal_wzrostu": "ai_growth",
 }
 
@@ -741,6 +754,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_alerts(dict(args))
     if name == "uklady_dyplomatyczne":
         return bridge.ai_diplomacy(dict(args))
+    if name == "dostawcy":
+        return bridge.ai_providers(dict(args))
     if name == "potencjal_wzrostu":
         return bridge.ai_growth(dict(args))
     return {"blad": f"{i18n._('nieznane narzędzie')}: {name}"}

@@ -58,6 +58,16 @@ TEXTS = {
         "growth": "Wzrost i prace",
         "waste": "Korupcja",
         "logi": "Logistyka",
+        "providers": "Modele i klucze",
+        "provider": "Dostawca",
+        "apikey": "Klucz API",
+        "setkey": "Zapisz klucz",
+        "makeactive": "Ustaw jako domyślny",
+        "nokey": "brak klucza",
+        "fromenv": "ze zmiennej środowiskowej",
+        "fromfile": "zapisany",
+        "engine": "Silnik",
+        "compare": "Porównaj silniki",
     },
     "en": {
         "title": "FCSiege",
@@ -104,6 +114,16 @@ TEXTS = {
         "growth": "Growth and works",
         "waste": "Waste",
         "logi": "Logistics",
+        "providers": "Models and keys",
+        "provider": "Provider",
+        "apikey": "API key",
+        "setkey": "Save key",
+        "makeactive": "Make default",
+        "nokey": "no key",
+        "fromenv": "from environment",
+        "fromfile": "saved",
+        "engine": "Engine",
+        "compare": "Compare engines",
     },
 }
 
@@ -361,8 +381,10 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
 </main>
 
 <div id="composer" hidden>
+  <select id="engine" title="{t[engine]}" style="flex:none;width:6.5rem"></select>
   <textarea id="ask" rows="1" placeholder="{t[ask]}"></textarea>
   <button class="btn" id="btn-send">{t[send]}</button>
+  <button class="btn ghost" id="btn-cmp" title="{t[compare]}">⇄</button>
   <button class="btn danger" id="btn-stop" hidden>{t[stop]}</button>
 </div>
 
@@ -380,6 +402,18 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
   <label class="hint">{t[token]}</label>
   <input type="password" id="tokenin" autocomplete="off">
   <p class="hint">{t[token_hint]}</p>
+
+  <h2 style="margin:1rem 0 .5rem;font-size:1rem">{t[providers]}</h2>
+  <div id="provlist" style="font-size:.82rem"></div>
+  <label class="hint">{t[provider]}</label>
+  <select id="provsel"></select>
+  <label class="hint">{t[apikey]}</label>
+  <input type="password" id="provkey" autocomplete="off" placeholder="sk-…">
+  <label class="check" style="margin-top:.5rem">
+    <input type="checkbox" id="provactive"> {t[makeactive]}</label>
+  <div class="row" style="margin-top:.5rem">
+    <button class="btn ghost" id="btn-provsave">{t[setkey]}</button>
+  </div>
   <div class="row" style="margin-top:.8rem">
     <button class="btn" id="btn-savetoken">{t[save]}</button>
     <button class="btn ghost" id="btn-closeset">×</button>
@@ -456,8 +490,53 @@ document.querySelectorAll("nav button").forEach((b) => {{
 }});
 
 /* ── ustawienia ──────────────────────────────────────────────────── */
+async function loadProviders() {{
+  try {{
+    const r = await fetch(url("/dostawcy"), {{ headers: headers() }});
+    if (!r.ok) return;
+    const d = await r.json();
+    const lista = d.dostawcy || d.providers || [];
+    const box = $("#provlist");
+    box.textContent = "";
+    const sel = $("#provsel");
+    sel.textContent = "";
+    lista.forEach((p) => {{
+      const id = p.dostawca || p.provider;
+      const ma = p.ma_klucz ?? p.has_key;
+      const skad = p.skad_klucz || p.key_source;
+      const row = el("div");
+      row.style.cssText = "display:flex;gap:.4rem;padding:.15rem 0";
+      row.append(el("span", null, ma ? "✓" : "·"));
+      row.append(el("b", null, p.nazwa || p.name || id));
+      row.append(el("span", "hint", ma
+        ? (skad === "env" ? "{t[fromenv]}" : "{t[fromfile]}") : "{t[nokey]}"));
+      if ((d.aktywny || d.active) === id) row.append(el("span", "hint", "★"));
+      box.append(row);
+      const o = el("option", null, (p.nazwa || p.name || id));
+      o.value = id;
+      sel.append(o);
+    }});
+  }} catch (e) {{ /* panel kluczy zostaje pusty */ }}
+}}
+
+$("#btn-provsave").addEventListener("click", async () => {{
+  const id = $("#provsel").value;
+  const klucz = $("#provkey").value.trim();
+  if (!id) return;
+  try {{
+    const r = await fetch(url("/dostawcy/" + id), {{
+      method: "POST", headers: headers(),
+      body: JSON.stringify({{ klucz: klucz, aktywny: $("#provactive").checked }})
+    }});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    $("#provkey").value = "";
+    loadProviders();
+  }} catch (e) {{ $("#provlist").textContent = String(e.message); }}
+}});
+
 $("#setbtn").addEventListener("click", () => {{
   $("#tokenin").value = token;
+  loadProviders();
   $("#settings").showModal();
 }});
 $("#btn-closeset").addEventListener("click", () => $("#settings").close());
@@ -644,7 +723,8 @@ async function send() {{
   try {{
     const r = await fetch(url("/czat"), {{
       method: "POST", headers: headers(),
-      body: JSON.stringify({{ tekst: text }}), signal: controller.signal
+      body: JSON.stringify({{ tekst: text, dostawca: $("#engine").value || undefined }}),
+      signal: controller.signal
     }});
     if (!r.ok || !r.body) {{
       const d = await r.json().catch(() => ({{}}));
@@ -697,6 +777,55 @@ async function send() {{
   }}
 }}
 
+async function fillEngines() {{
+  try {{
+    const r = await fetch(url("/dostawcy"), {{ headers: headers() }});
+    if (!r.ok) return;
+    const d = await r.json();
+    const sel = $("#engine");
+    sel.textContent = "";
+    (d.dostawcy || d.providers || []).forEach((p) => {{
+      if (!(p.ma_klucz ?? p.has_key)) return;
+      const id = p.dostawca || p.provider;
+      const o = el("option", null, id);
+      o.value = id;
+      if ((d.aktywny || d.active) === id) o.selected = true;
+      sel.append(o);
+    }});
+  }} catch (e) {{ /* zostaje domyślny silnik serwera */ }}
+}}
+
+async function compare() {{
+  const text = $("#ask").value.trim();
+  if (!text || controller) return;
+  $("#ask").value = "";
+  addMsg("me", text);
+  const czekam = addMsg("ai", "…");
+  try {{
+    const r = await fetch(url("/porownaj"), {{
+      method: "POST", headers: headers(), body: JSON.stringify({{ tekst: text }})
+    }});
+    const d = await r.json();
+    czekam.remove();
+    (d.odpowiedzi || d.answers || []).forEach((w) => {{
+      const b = addMsg(w.blad ? "err" : "ai", "");
+      b.append(el("b", null, w.dostawca + " · " + w.model));
+      b.append(el("div", null, w.blad || w.odpowiedz));
+      if ((w.uzyte_narzedzia || []).length) {{
+        b.append(el("div", "toolchip", "✓ " + w.uzyte_narzedzia.join(", ")));
+      }}
+    }});
+    const zgodne = d.liczby_zgodne_u_wszystkich || d.numbers_agreed_by_all || [];
+    if (zgodne.length) {{
+      addMsg("ai", "⇄ zgodne liczby: " + zgodne.join(", "));
+    }}
+  }} catch (e) {{
+    czekam.remove();
+    addMsg("err", String(e.message));
+  }}
+}}
+
+$("#btn-cmp").addEventListener("click", compare);
 $("#btn-send").addEventListener("click", send);
 $("#btn-stop").addEventListener("click", () => controller && controller.abort());
 $("#ask").addEventListener("input", (e) => {{
@@ -847,6 +976,7 @@ async function watchSaves() {{
 
 ping();
 fillSelects();
+fillEngines();
 setInterval(ping, 20000);
 watchSaves();
 </script>
