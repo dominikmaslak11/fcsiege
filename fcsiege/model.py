@@ -479,6 +479,28 @@ class Ruleset:
             return 0
         return max(self.tech_depth(t) for t in techs)
 
+    def eras_out_of_order(self, prog: int = 5) -> list[dict]:
+        """Epoki, ktore w tym zestawie wypadaja nie tam, gdzie w historii.
+
+        Nazwy epok pochodza z drabiny ogolnego przeznaczenia, a progi liczymy
+        z faktycznego drzewa danego zestawu. Drobne przestawienia zdarzaja sie
+        wszedzie (w `sandbox` Gunpowder lezy plycej niz Navigation), wiec
+        zglaszamy tylko roznice powyzej `prog` poziomow - takie, ktore realnie
+        mylą. W `ancients` Navigation lezy 29 poziomow przed Feudalism.
+        """
+        have = [(name, tech, self.tech_depth(tech))
+                for name, tech in ERA_LANDMARKS if tech and tech in self.techs]
+        out = []
+        for i, (name, tech, depth) in enumerate(have):
+            for earlier_name, _t, earlier_depth in have[:i]:
+                if earlier_depth - depth > prog:
+                    out.append({"epoka": name, "technologia": tech,
+                                "prog": depth,
+                                "wypada_przed": earlier_name,
+                                "o_ile_poziomow": earlier_depth - depth})
+                    break
+        return out
+
     def eras(self) -> list[dict]:
         """Epoki dostepne w tym zestawie regul, z progiem drzewa technologii."""
         out = []
@@ -607,14 +629,21 @@ def discover_rulesets(root: str) -> list[str]:
 
 
 def default_ruleset_roots() -> list[str]:
-    """Miejsca, w ktorych szukamy zestawow regul."""
+    """Miejsca, w ktorych szukamy zestawow regul.
+
+    Zestawy doinstalowane przez instalator modpackow Freeciva trafiaja do
+    katalogu uzytkownika z numerem wersji, np. ~/.freeciv/3.2/ancients - stad
+    globy po wersjach, a nie sama sciezka bazowa.
+    """
+    import glob as _glob
+
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    roots = [
-        os.path.join(here, "data", "rulesets"),
-        os.path.expanduser("~/.local/share/freeciv"),
-        "/usr/share/freeciv",
-        "/usr/local/share/freeciv",
-    ]
+    roots = [os.path.join(here, "data", "rulesets")]
+    for base in ("~/.freeciv", "~/.local/share/freeciv"):
+        base = os.path.expanduser(base)
+        roots.append(base)
+        roots.extend(sorted(_glob.glob(os.path.join(base, "*"))))
+    roots += ["/usr/share/freeciv", "/usr/local/share/freeciv"]
     env = os.environ.get("FREECIV_DATA_PATH")
     if env:
         roots = env.split(":") + roots

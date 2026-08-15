@@ -2085,6 +2085,11 @@ class IntelMixin:
         eras = rs.eras()
         out = {
             "zestaw_regul": rs.name,
+            **({"uwaga": "nazwy epok są etykietami progów drzewa, nie "
+                          "chronologią — w tym zestawie część wypada nie tam, "
+                          "gdzie w historii",
+                "nietypowa_kolejnosc": _kolejnosc}
+               if (_kolejnosc := rs.eras_out_of_order()) else {}),
             "maks_prog": rs.max_tech_depth(),
             "prog": depth,
             "epoka": rs.era_at(depth)["nazwa"],

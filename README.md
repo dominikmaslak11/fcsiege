@@ -59,6 +59,28 @@ sam polski napis, więc kod czyta się tak samo jak wcześniej.
 Test `tests/test_i18n.py` pilnuje, żeby każdy napis owinięty w `_()` miał
 tłumaczenie — bez tego angielski interfejs po cichu gubiłby pojedyncze zdania.
 
+## Zestawy reguł
+
+Aplikacja szuka zestawów w tej kolejności:
+
+```
+<repo>/data/rulesets/          siedem zestawów z dystrybucji Freeciva
+~/.freeciv/<wersja>/           zestawy doinstalowane instalatorem modpacków
+~/.local/share/freeciv/<wersja>/
+/usr/share/freeciv/
+$FREECIV_DATA_PATH             ma pierwszeństwo przed wszystkim
+```
+
+Instalator modpacków Freeciva wrzuca zestawy do katalogu z **numerem wersji**
+(`~/.freeciv/3.2/ancients`), dlatego przeszukujemy też podkatalogi, a nie samą
+ścieżkę bazową.
+
+Nazwy epok na suwaku pochodzą z drabiny historycznej ogólnego przeznaczenia,
+a progi liczymy z faktycznego drzewa danego zestawu. Gdy któraś epoka wypada
+w innym miejscu niż w historii — jak `Wiek odkryć` w zestawie `ancients`,
+o 29 poziomów przed `Średniowieczem` — narzędzie `epoki` mówi o tym wprost,
+zamiast udawać, że etykiety pasują.
+
 ## Skąd biorą się liczby
 
 Aplikacja **nie ma zaszytej ani jednej statystyki**. Przy starcie parsuje pliki
