@@ -300,6 +300,41 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "alerty",
+        "description": (
+            "Skanuje wczytany zapis i zwraca listę rzeczy, które się psują, "
+            "posortowaną wg pilności, każdą z liczbą tur do szkody i "
+            "konkretną radą: miasta, które zaraz stracą rozmiar przez deficyt "
+            "żywności, zamieszki, produkcję zamienianą na złoto, zdobyte "
+            "miasta bez garnizonu, wojsko w polu robiące niezadowolonych. "
+            "Wywołuj po każdym wczytaniu zapisu i na początku rozmowy o partii."
+        ),
+        "input_schema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
+        "name": "obrona_miasta",
+        "description": (
+            "Czym bronić KONKRETNEGO miasta z zapisu. W odróżnieniu od "
+            "ogólnego 'ranking' bierze prawdziwy teren spod tego miasta, "
+            "ulepszenia kafla, faktyczne budynki, rozmiar i ustrój, a listę "
+            "jednostek z realnie zbadanych technologii. Za napastnika "
+            "przyjmuje najgroźniejszą jednostkę, jaką widać u sąsiadów. "
+            "Szereguje wg kosztu za jednego zatrzymanego napastnika."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "miasto": {"type": "string",
+                           "description": "puste = najbardziej wysunięte miasto"},
+                "napastnik": {"type": "string",
+                              "description": "wymuś konkretny typ napastnika"},
+                "limit": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "mobilnosc",
         "description": (
             "Logistyka i zasięg. Odwrotna perspektywa do 'gotowosc_wojenna': "
@@ -561,6 +596,8 @@ TOOL_METHOD = {
     "plan_budowy": "ai_build_plan",
     "gotowosc_wojenna": "ai_war_readiness",
     "mobilnosc": "ai_mobility",
+    "obrona_miasta": "ai_city_defense",
+    "alerty": "ai_alerts",
 }
 
 
@@ -662,6 +699,10 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_war_readiness(dict(args))
     if name == "mobilnosc":
         return bridge.ai_mobility(dict(args))
+    if name == "obrona_miasta":
+        return bridge.ai_city_defense(dict(args))
+    if name == "alerty":
+        return bridge.ai_alerts(dict(args))
     return {"blad": f"{i18n._('nieznane narzędzie')}: {name}"}
 
 

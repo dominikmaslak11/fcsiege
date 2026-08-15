@@ -439,6 +439,40 @@ przejezdne dla danej klasy i mówi, ile twoich jednostek stoi w którym obszarze
 oraz do których miast wroga faktycznie dotrą. Najsilniejsza jednostka jest
 bezużyteczna, jeśli utknie po drugiej stronie bagna.
 
+### Ostrzeżenia i tryb nasłuchu
+
+`alerty` skanuje wczytany zapis i zwraca to, co się psuje — posortowane wg
+pilności, z liczbą tur do szkody i **radą, a nie samą diagnozą**: miasta, które
+zaraz stracą rozmiar przez deficyt żywności, zamieszki, produkcję zamienianą na
+`Coinage`, zdobyte miasta bez garnizonu, wojsko w polu robiące niezadowolonych.
+
+Aplikacja umie się z tym odzywać sama:
+
+```bash
+python3 fcsiege.py watch          # w drugim oknie terminala obok gry
+```
+
+`SaveWatcher` odpytuje `~/.freeciv/saves` i po każdym nowym zapisie przelicza
+ostrzeżenia. Czeka, aż plik przestanie rosnąć — inaczej trafiłby na zapis
+w trakcie zapisywania. Ten sam strumień wychodzi po HTTP jako `GET /zdarzenia`
+(SSE), a interfejs webowy pokazuje z niego powiadomienia i licznik przy
+zakładce.
+
+### Czym bronić konkretnego miasta
+
+`obrona_miasta` bierze prawdziwy teren spod wskazanego miasta, ulepszenia kafla,
+faktyczne budynki, rozmiar i ustrój, listę jednostek z realnie zbadanych
+technologii, a za napastnika — najgroźniejszą jednostkę widzianą u sąsiadów.
+Szereguje wg **kosztu za jednego zatrzymanego napastnika**, nie wg samej obrony.
+
+### Wartość zdobyczy
+
+`gotowosc_wojenna` liczy nie tylko koszt zdobycia miasta, ale i to, co państwo
+realnie dostaje: budynki, port, drogi wokół, **połączenie z własną siecią
+dróg**, dystans do stolicy i otoczenie. Miasto bez dróg i portu jest
+obciążeniem, nie nabytkiem — kosztuje utrzymanie, garnizon i szczęście, a nie
+daje produkcji.
+
 ### Mobilność i logistyka
 
 `mobilnosc` jest odwrotnością `gotowosc_wojenna`: tamto mówi, ile tur dzieli
@@ -585,6 +619,8 @@ monotoniczność obrony oraz 175 losowych scenariuszy na wszystkich zestawach.
 | `fcsiege/aicreds.py` | poświadczenia do API Anthropica — bez Qt |
 | `fcsiege/aiclient.py` | adapter pętli rozmowy na sygnały Qt (dla okna) |
 | `fcsiege/webui.py` | strona serwowana przez API (telefon w tailnecie) |
+| `fcsiege/watcher.py` | obserwator katalogu zapisów — aplikacja odzywa się sama |
+| `fcsiege/cli_watch.py` | `fcsiege.py watch` — nasłuch w terminalu |
 | `fcsiege/chatpanel.py` | interfejs czatu i logowania |
 | `tools/screenshots.py` | generuje zrzuty do `docs/` (działa bez ekranu) |
 

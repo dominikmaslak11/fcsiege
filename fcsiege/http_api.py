@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import secrets
 import sys
 import threading
@@ -97,6 +98,45 @@ class Engine:
 
 
 SESSIONS = ChatSessions()
+
+
+class SaveBroadcaster:
+    """Jeden obserwator zapisow, wielu sluchaczy.
+
+    Kazdy klient SSE dostaje wlasna kolejke; obserwator startuje leniwie przy
+    pierwszym sluchaczu, zeby serwer bez otwartej przegladarki nic nie robil.
+    """
+
+    def __init__(self):
+        self._subs: list[queue.Queue] = []
+        self._lock = threading.Lock()
+        self._watcher = None
+
+    def subscribe(self) -> queue.Queue:
+        q: queue.Queue = queue.Queue(maxsize=8)
+        with self._lock:
+            self._subs.append(q)
+            if self._watcher is None:
+                from .watcher import SaveWatcher
+                self._watcher = SaveWatcher(self._fire, interval=3.0)
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        with self._lock:
+            if q in self._subs:
+                self._subs.remove(q)
+
+    def _fire(self, path: str) -> None:
+        with self._lock:
+            subs = list(self._subs)
+        for q in subs:
+            try:
+                q.put_nowait(path)
+            except queue.Full:
+                pass
+
+
+WATCH = SaveBroadcaster()
 
 
 def openapi_schema() -> dict:
@@ -243,6 +283,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"narzedzia": localized_specs()})
         if path == "/openapi.json":
             return self._send(200, openapi_schema())
+        if path in ("/zdarzenia", "/events"):
+            return self._events()
         if path in ("/stan", "/state"):
             return self._call("pokaz_stan", {})
         return self._send(404, {"blad": f"{_('nie ma ścieżki')} {path}"})
@@ -283,6 +325,49 @@ class Handler(BaseHTTPRequestHandler):
             return self._call(name, body)
 
         return self._send(404, {"blad": f"{_('nie ma ścieżki')} {path}"})
+
+    def _events(self) -> None:
+        """Strumien zdarzen: nowy zapis gry -> stan partii i ostrzezenia.
+
+        Dzieki temu aplikacja odzywa sie sama po kazdej turze, zamiast czekac
+        na pytanie.
+        """
+        from .watcher import summarize
+
+        q = WATCH.subscribe()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        def emit(payload: dict) -> bool:
+            try:
+                self.wfile.write(b"data: " + json.dumps(
+                    i18n.translate(payload), ensure_ascii=False,
+                    default=str).encode("utf-8") + b"\n\n")
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        try:
+            if not emit({"typ": "polaczono"}):
+                return
+            while True:
+                try:
+                    path = q.get(timeout=20)
+                except queue.Empty:
+                    if not emit({"typ": "puls"}):     # podtrzymanie polaczenia
+                        return
+                    continue
+                payload = summarize(self.engine._local(), path, i18n.language())
+                if not emit({"typ": "nowy_zapis", **payload}):
+                    return
+        finally:
+            WATCH.unsubscribe(q)
 
     def _chat(self, body: dict) -> None:
         """Rozmowa z asystentem, strumieniowana jako Server-Sent Events.

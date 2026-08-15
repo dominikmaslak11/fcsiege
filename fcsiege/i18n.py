@@ -365,6 +365,24 @@ KEYS: dict[str, str] = {
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
+    "alertow": "alerts_count", "krytycznych": "critical", "pilnych": "urgent",
+    "waga": "severity", "tur_do_szkody": "turns_to_harm", "rodzaj": "kind",
+    "co_sie_dzieje": "what_is_happening", "rada": "advice",
+    "zasada_darmowej_zywnosci": "free_food_rule",
+    "wartosc_zdobyczy": "spoils_value", "ocena_zdobyczy": "spoils_score",
+    "drog_wokol": "roads_around", "polaczone_z_moja_siecia": "linked_to_my_network",
+    "dystans_do_mojej_stolicy": "distance_to_my_capital", "otoczenie": "surroundings",
+    "nadmorskie": "coastal", "przed_kim": "against_whom",
+    "stopien_przy_budowie": "veterancy_when_built",
+    "jedna_sztuka_zatrzyma": "one_unit_stops",
+    "sztuk_by_utrzymac": "units_to_hold", "tarcz_lacznie": "shields_total",
+    "szansa_przy_jednej_proc": "odds_with_one_pct",
+    "koszt_na_zatrzymanego": "cost_per_attacker_stopped",
+    "niezadowolonych_gdy_w_polu": "unhappy_when_in_field",
+    "utrzymanie_tarcze": "shield_upkeep", "utrzymanie_zywnosc": "food_upkeep",
+    "tur_dostawy": "delivery_turns", "czym": "how", "przez_port": "via_port",
+    "moje_miasto_portowe": "my_city_is_port", "partner_portowy": "partner_is_port",
+    "ocena_na_ture": "score_per_turn",
     "punkty_zborne": "rally_points", "cele_wroga_w_zasiegu": "enemy_targets_in_reach",
     "moich_w_zasiegu": "mine_in_reach", "najszybciej_tur": "fastest_turns",
     "wg_typu": "by_type", "grupy": "groups", "sredni_zasieg_kafli": "average_reach_tiles",
@@ -502,6 +520,8 @@ TOOL_NAMES: dict[str, str] = {
     "plan_budowy": "build_plan",
     "gotowosc_wojenna": "war_readiness",
     "mobilnosc": "mobility",
+    "alerty": "alerts",
+    "obrona_miasta": "city_defense",
     "korupcja": "waste",
     "moje_technologie": "my_technologies",
     "szlaki_handlowe": "trade_routes",
@@ -567,6 +587,21 @@ TOOL_DESC: dict[str, str] = {
         "The list of eras in the current ruleset with the tech-tree step that "
         "opens each one and what becomes available at that step: units, "
         "buildings and wonders.",
+    "alerty":
+        "Scans the loaded savegame and returns everything that is going wrong, "
+        "ordered by urgency, each with the number of turns until the damage "
+        "lands and a concrete piece of advice: cities about to lose a "
+        "population point to a food deficit, civil disorder, production being "
+        "converted to gold, conquered cities left without a garrison, troops "
+        "in the field generating unhappiness. Call it after loading a "
+        "savegame and at the start of any conversation about the game.",
+    "obrona_miasta":
+        "What to defend a SPECIFIC city with. Unlike the generic 'rank' it "
+        "takes the real terrain under that city, its tile improvements, its "
+        "actual buildings, size and government, and the unit list from the "
+        "technologies genuinely researched. It assumes the most dangerous "
+        "attacker actually visible among the neighbours, and orders the "
+        "options by cost per attacker stopped.",
     "mobilnosc":
         "Logistics and reach. The inverse of 'war_readiness': that tool says "
         "how many turns to a named city, this one says WHERE a unit can get at "

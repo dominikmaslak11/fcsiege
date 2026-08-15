@@ -46,6 +46,10 @@ TEXTS = {
         "no_save": "Nie wczytano zapisu.",
         "thinking": "Myślę…",
         "settings": "Ustawienia",
+        "alerts": "Ostrzeżenia",
+        "watching": "nasłuchuję zapisów",
+        "newsave": "Nowy zapis",
+        "dismiss": "Zamknij",
     },
     "en": {
         "title": "FCSiege",
@@ -80,6 +84,10 @@ TEXTS = {
         "no_save": "No savegame loaded.",
         "thinking": "Thinking…",
         "settings": "Settings",
+        "alerts": "Alerts",
+        "watching": "watching savegames",
+        "newsave": "New savegame",
+        "dismiss": "Dismiss",
     },
 }
 
@@ -232,6 +240,29 @@ nav button {{
 }}
 nav button[aria-selected="true"] {{ color:var(--accent); border-top-color:var(--accent); }}
 
+/* ── powiadomienia ─────────────────────────────────────────────────── */
+#toasts {{
+  position:fixed; left:.6rem; right:.6rem; bottom:calc(3.6rem + var(--safe-b));
+  z-index:30; display:flex; flex-direction:column; gap:.45rem; pointer-events:none;
+}}
+.toast {{
+  pointer-events:auto; background:var(--surface); border:1px solid var(--border);
+  border-left:3px solid var(--accent); border-radius:8px; padding:.6rem .75rem;
+  box-shadow:0 8px 24px -12px rgba(0,0,0,.8); animation:rise .18s ease-out;
+}}
+.toast.krytyczne {{ border-left-color:var(--bad); }}
+.toast.pilne {{ border-left-color:var(--warn); }}
+.toast b {{ display:block; font-size:.86rem; }}
+.toast small {{ display:block; color:var(--faint); font-size:.74rem; margin-top:.1rem; }}
+.toast p {{ margin:.35rem 0 0; font-size:.84rem; color:var(--dim); }}
+.toast .x {{ float:right; background:none; border:0; color:var(--faint); cursor:pointer;
+             font-size:1rem; line-height:1; padding:0 0 0 .5rem; }}
+@keyframes rise {{ from {{ opacity:0; transform:translateY(6px); }} to {{ opacity:1; }} }}
+nav button .badge {{
+  display:inline-block; min-width:1.05rem; padding:0 .25rem; margin-left:.25rem;
+  border-radius:999px; background:var(--bad); color:#0B0F1A;
+  font-family:var(--mono); font-size:.62rem; font-weight:700;
+}}
 dialog {{
   border:1px solid var(--border); border-radius:12px; background:var(--surface);
   color:var(--text); padding:1rem; width:min(22rem,92vw);
@@ -273,6 +304,10 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
         <button class="btn ghost" data-tool="szlaki_handlowe">{t[r_trade]}</button>
       </div>
     </div>
+    <div class="card" id="alertcard" hidden>
+      <h2>{t[alerts]}</h2>
+      <div id="alertlist"></div>
+    </div>
     <div class="card" id="reportcard" hidden><h2 id="reporttitle"></h2><div id="report"></div></div>
   </section>
 
@@ -303,6 +338,8 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
   <button class="btn" id="btn-send">{t[send]}</button>
   <button class="btn danger" id="btn-stop" hidden>{t[stop]}</button>
 </div>
+
+<div id="toasts" aria-live="polite"></div>
 
 <nav role="tablist">
   <button role="tab" aria-selected="true" data-panel="p-game">{t[tab_game]}</button>
@@ -642,9 +679,79 @@ $("#ask").addEventListener("keydown", (e) => {{
   if (e.key === "Enter" && !e.shiftKey) {{ e.preventDefault(); send(); }}
 }});
 
+/* ── powiadomienia o nowym zapisie ───────────────────────────────── */
+function toast(a) {{
+  const box = el("div", "toast " + (a.waga || a.severity || ""));
+  const x = el("button", "x", "×");
+  x.addEventListener("click", () => box.remove());
+  box.append(x);
+  box.append(el("b", null, (a.miasto || a.city || "") + " — " + (a.rodzaj || a.kind || "")));
+  const tur = a.tur_do_szkody ?? a.turns_to_harm;
+  box.append(el("small", null, (a.waga || a.severity || "") +
+    (tur !== null && tur !== undefined ? " · " + tur + " tur" : "")));
+  box.append(el("p", null, a.rada || a.advice || ""));
+  $("#toasts").append(box);
+  setTimeout(() => box.remove(), 20000);
+}}
+
+function renderAlerts(list) {{
+  const box = $("#alertlist");
+  box.textContent = "";
+  (list || []).forEach((a) => {{
+    const row = el("div", "toast " + (a.waga || a.severity || ""));
+    row.style.marginBottom = ".4rem";
+    row.append(el("b", null, (a.miasto || a.city || "") + " — " + (a.rodzaj || a.kind || "")));
+    const tur = a.tur_do_szkody ?? a.turns_to_harm;
+    row.append(el("small", null, (a.waga || a.severity || "") +
+      (tur !== null && tur !== undefined ? " · " + tur + " tur" : "")));
+    row.append(el("p", null, (a.co_sie_dzieje || a.what_is_happening || "") +
+      " → " + (a.rada || a.advice || "")));
+    box.append(row);
+  }});
+  $("#alertcard").hidden = !(list && list.length);
+  const pilne = (list || []).filter((a) =>
+    ["krytyczne", "pilne", "critical", "urgent"].includes(a.waga || a.severity)).length;
+  const tab = document.querySelector('nav button[data-panel="p-game"]');
+  tab.textContent = "{t[tab_game]}";
+  if (pilne) tab.append(el("span", "badge", String(pilne)));
+}}
+
+async function watchSaves() {{
+  for (;;) {{
+    try {{
+      const r = await fetch(url("/zdarzenia"), {{ headers: headers() }});
+      if (!r.ok || !r.body) throw new Error("HTTP " + r.status);
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {{
+        const {{ done, value }} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {{ stream: true }});
+        let cut;
+        while ((cut = buf.indexOf("\\n\\n")) >= 0) {{
+          const chunk = buf.slice(0, cut);
+          buf = buf.slice(cut + 2);
+          const line = chunk.split("\\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const ev = JSON.parse(line.slice(5));
+          if (ev.typ !== "nowy_zapis" && ev.type !== "new_savegame") continue;
+          const alerts = ev.alerty || ev.alerts || [];
+          renderAlerts(alerts);
+          alerts.filter((a) => ["krytyczne", "pilne", "critical", "urgent"]
+            .includes(a.waga || a.severity)).slice(0, 3).forEach(toast);
+          $("#state").textContent = (ev.plik || ev.file || "{t[newsave]}").slice(0, 28);
+        }}
+      }}
+    }} catch (e) {{ /* zerwane połączenie — próbujemy dalej */ }}
+    await new Promise((r) => setTimeout(r, 5000));
+  }}
+}}
+
 ping();
 fillSelects();
 setInterval(ping, 20000);
+watchSaves();
 </script>
 </body>
 </html>

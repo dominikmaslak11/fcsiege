@@ -869,6 +869,276 @@ class Intel:
 
 
 
+
+
+    # ----------------------------------------------------------- ostrzezenia
+
+    def alerts(self, rs) -> dict:
+        """Co sie psuje w panstwie i co z tym zrobic - posortowane wg pilnosci.
+
+        Kazde ostrzezenie niesie liczbe tur do szkody, zeby dalo sie ustawic
+        kolejnosc dzialania, oraz konkretna rade, a nie sama diagnoze.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+
+        # darmowe utrzymanie zywnosci wg rozmiaru, wprost z regul
+        base, steps = 0, []
+        for eff in rs.effects_by_type.get("Unit_Upkeep_Free_Per_City", []):
+            if [x.name for x in eff.reqs if x.type == "OutputType"] != ["Food"]:
+                continue
+            if [x for x in eff.reqs if x.type == "Gov"]:
+                continue
+            sizes = [int(x.name) for x in eff.reqs
+                     if x.type == "MinSize" and str(x.name).isdigit()]
+            if sizes:
+                steps.extend([sizes[0]] * eff.value)
+            else:
+                base += eff.value
+        steps.sort()
+
+        def free_food(size: int) -> int:
+            return base + sum(1 for m in steps if size >= m)
+
+        cities = {int(r.get("id") or 0): str(r.get("name") or "?") for r in rows}
+        jedzacy = collections.Counter()
+        w_polu = collections.Counter()
+        na_kaflu = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut is None:
+                continue
+            if getattr(ut, "uk_food", 0) > 0:
+                jedzacy[u.homecity] += 1
+            if getattr(ut, "uk_happy", 0) > 0:
+                w_polu[u.homecity] += 1
+            if (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                na_kaflu[(u.x, u.y)] += 1
+
+        uf = max(1, self._city_effect(rs, "Unhappy_Factor", "", set(), gov,
+                                      techs, mine_blds, 0))
+        mcm = self._city_effect(rs, "Make_Content_Mil", "", set(), gov, techs,
+                                mine_blds, 0)
+        na_polu_limit = mcm // uf
+
+        alerty = []
+        for r in rows:
+            nazwa = str(r.get("name") or "?")
+            cid = int(r.get("id") or 0)
+            size = int(r.get("size") or 0)
+            zapas = int(r.get("food_stock") or 0)
+            blds = set(s._bits(r.get("improvements")))
+            deficyt = max(0, jedzacy.get(cid, 0) - free_food(size))
+            if deficyt > 0:
+                tur = zapas // deficyt if deficyt else None
+                nadmiar = jedzacy.get(cid, 0) - free_food(size)
+                alerty.append({
+                    "waga": "krytyczne" if (tur or 99) <= 5 else "pilne",
+                    "tur_do_szkody": tur,
+                    "miasto": nazwa, "rodzaj": "spadek wielkości miasta",
+                    "co_sie_dzieje": (
+                        f"rozmiar {size} daje {free_food(size)} darmowych "
+                        f"utrzymań na żywności, a miasto żywi "
+                        f"{jedzacy.get(cid, 0)} jednostek — deficyt {deficyt}"),
+                    "rada": (
+                        f"przenieś {nadmiar} jednostek do innego miasta "
+                        f"macierzystego (wejdź nimi do dużego miasta i zmień "
+                        f"miasto macierzyste) — to nic nie kosztuje i działa "
+                        f"od razu"),
+                })
+            if str(r.get("currently_building_name")) == "Coinage":
+                alerty.append({
+                    "waga": "warte uwagi", "tur_do_szkody": None,
+                    "miasto": nazwa, "rodzaj": "produkcja zamieniana na złoto",
+                    "co_sie_dzieje": "miasto buduje Coinage",
+                    "rada": "przestaw na budynek albo jednostkę — złota i tak "
+                            "masz nadmiar, a tarcze przepadają",
+                })
+            if int(r.get("anarchy") or 0) > 0:
+                alerty.append({
+                    "waga": "krytyczne", "tur_do_szkody": 0,
+                    "miasto": nazwa, "rodzaj": "zamieszki",
+                    "co_sie_dzieje": "miasto jest w stanie zamieszek — "
+                                     "produkcja stoi",
+                    "rada": "wprowadź jednostkę wojskową (stan wojenny), "
+                            "podnieś luksus albo dostaw świątynię",
+                })
+            # zdobyte miasto bez garnizonu latwiej odkupic
+            if int(r.get("original") or 0) != s.me.slot and not na_kaflu.get(
+                    (int(r["x"]), int(r["y"])), 0):
+                alerty.append({
+                    "waga": "pilne", "tur_do_szkody": None,
+                    "miasto": nazwa, "rodzaj": "zdobyte miasto bez garnizonu",
+                    "co_sie_dzieje": "obce z pochodzenia miasto stoi puste, "
+                                     "więc jest tanie do odkupienia",
+                    "rada": "wstaw jedną jednostkę — koszt przekupienia "
+                            "podwaja się (Incite_Cost_Pct +100)",
+                })
+
+        for cid, n in w_polu.items():
+            koszt = max(0, n * uf - mcm)
+            if koszt > 0:
+                alerty.append({
+                    "waga": "warte uwagi", "tur_do_szkody": None,
+                    "miasto": cities.get(cid, "?"),
+                    "rodzaj": "wojsko w polu robi niezadowolonych",
+                    "co_sie_dzieje": (
+                        f"{n} jednostek w polu przy limicie {na_polu_limit} — "
+                        f"{koszt} niezadowolonych"),
+                    "rada": "zawróć nadmiar do garnizonu; w mieście te same "
+                            "jednostki robią zadowolonych przez stan wojenny",
+                })
+
+        kolejnosc = {"krytyczne": 0, "pilne": 1, "warte uwagi": 2}
+        alerty.sort(key=lambda a: (kolejnosc.get(a["waga"], 9),
+                                   a["tur_do_szkody"]
+                                   if a["tur_do_szkody"] is not None else 999))
+        return {
+            "alertow": len(alerty),
+            "krytycznych": sum(1 for a in alerty if a["waga"] == "krytyczne"),
+            "pilnych": sum(1 for a in alerty if a["waga"] == "pilne"),
+            "alerty": alerty,
+            "zasada_darmowej_zywnosci":
+                f"{base} jednostek za darmo, +1 za każdy rozmiar od "
+                f"{steps[0] if steps else '-'} do {steps[-1] if steps else '-'}",
+        }
+
+    # ------------------------------------------------------- obrona miasta
+
+    def city_defense(self, rs, miasto: str = "", napastnik: str = "",
+                     limit: int = 8) -> dict:
+        """Czym bronic KONKRETNEGO miasta - z jego prawdziwym terenem i murami.
+
+        Rozni sie od ogolnego rankingu tym, ze bierze teren spod miasta,
+        ulepszenia kafla, faktyczne budynki, rozmiar i ustroj z zapisu, a liste
+        dostepnych jednostek z realnie zbadanych technologii. Za napastnika
+        przyjmuje najgrozniejsza jednostke, jaka widac u sasiadow - bo bronimy
+        sie przed tym, co istnieje, a nie przed tym, co teoretycznie mozliwe.
+        """
+        from .advisor import rank_defenders
+        from .combat import Side, Situation
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        if not rows:
+            return {"blad": "brak miast"}
+
+        row = None
+        if miasto:
+            row = next((r for r in rows
+                        if str(r.get("name", "")).lower() == miasto.lower()), None)
+            if row is None:
+                return {"blad": f"nie mam miasta {miasto}",
+                        "dostepne": sorted(str(r.get("name")) for r in rows)}
+        else:
+            # bez wskazania: najbardziej wysuniete, czyli najdalsze od stolicy
+            stolica = next(((int(r["x"]), int(r["y"])) for r in rows
+                            if "Palace" in set(s._bits(r.get("improvements")))), None)
+            row = max(rows, key=lambda r: self.geom.real_distance(
+                (int(r["x"]), int(r["y"])), stolica)) if stolica else rows[0]
+
+        x, y = int(row["x"]), int(row["y"])
+        blds = set(s._bits(row.get("improvements")))
+        wonders, plain = set(), set()
+        for name in blds:
+            b = rs.buildings.get(name)
+            if b and b.is_wonder:
+                wonders.add(name)
+            elif b:
+                plain.add(name)
+        for r in rows:                       # cuda dzialaja w calym panstwie
+            for name in s._bits(r.get("improvements")):
+                b = rs.buildings.get(name)
+                if b and b.is_wonder:
+                    wonders.add(name)
+
+        terr_name = tmap.terrain(x, y)
+        terr = rs.terrains.get(terr_name)
+        if terr is None:
+            return {"blad": f"nie rozpoznaję terenu pod miastem {row.get('name')}"}
+        extras = {e for e in rs.extras
+                  if tmap.has_extra(e, x, y)} if rs.extras else set()
+
+        techs = _known_techs(s) - {"A_NONE"}
+        sit = Situation(
+            terrain=terr, extras=extras, in_city=True,
+            city_size=int(row.get("size") or 1),
+            buildings=plain, player_buildings=wonders,
+            fortified=True, gov=s.me.government or "",
+            techs=techs, units_on_tile=1,
+        )
+
+        # napastnik: najgrozniejsze, co realnie stoi u sasiadow
+        groza = None
+        for slot in s._sections:
+            if slot == s.me.slot or slot not in s.players:
+                continue
+            for u in s.units_of(slot):
+                ut = rs.units.get(u.type)
+                if not (ut and ut.attack > 0 and "NonMil" not in ut.flags):
+                    continue
+                if groza is None or ut.attack > groza.attack:
+                    groza = ut
+        if napastnik:
+            groza = rs.units.get(napastnik) or groza
+        if groza is None:
+            groza = max((u for u in rs.units_available(techs) if u.attack > 0),
+                        key=lambda u: u.attack, default=None)
+        if groza is None:
+            return {"blad": "nie znalazłem żadnej jednostki atakującej"}
+
+        att = [Side(utype=groza, count=1, vet=0)]
+        opts = rank_defenders(rs, att, sit, techs, confidence=0.95,
+                              promotions=True, trials=3000, from_barracks=True)
+
+        out = []
+        for o in opts[:limit]:
+            ut = o.utype
+            out.append({
+                "jednostka": ut.name,
+                "stopien_przy_budowie": o.vet_name,
+                "obrona": ut.defense, "zycie": ut.hitpoints,
+                "koszt": ut.build_cost,
+                "utrzymanie_tarcze": ut.uk_shield,
+                "utrzymanie_zywnosc": ut.uk_food,
+                "niezadowolonych_gdy_w_polu": ut.uk_happy,
+                "jedna_sztuka_zatrzyma": o.stops_alone,
+                "sztuk_by_utrzymac": o.min_count,
+                "tarcz_lacznie": o.shields,
+                "szansa_przy_jednej_proc": round(o.p_single * 100, 1),
+                "koszt_na_zatrzymanego": (round(ut.build_cost / o.stops_alone, 1)
+                                          if o.stops_alone else None),
+            })
+        out.sort(key=lambda d: (d["koszt_na_zatrzymanego"] is None,
+                                d["koszt_na_zatrzymanego"] or 1e9))
+        return {
+            "miasto": str(row.get("name")),
+            "x": x, "y": y,
+            "rozmiar": sit.city_size,
+            "teren": terr.name,
+            "ulepszenia_kafla": sorted(extras),
+            "budynki": sorted(plain),
+            "przed_kim": {"jednostka": groza.name, "atak": groza.attack,
+                          "skad": "najgroźniejsza jednostka widziana u sąsiadów"},
+            "ranking": out,
+            "zasada": (
+                "kolejność wg kosztu za jednego zatrzymanego napastnika; "
+                "utrzymanie i niezadowolenie w polu podane osobno, bo garnizon "
+                "stoi w mieście i nie generuje tego drugiego"),
+        }
+
     # ------------------------------------------------------------- mobilnosc
 
     def mobility(self, rs, tury: int = 2, jednostka: str = "") -> dict:
@@ -1038,6 +1308,63 @@ class Intel:
 
         # --- cele
         tmap = TerrainMap(s)
+        # Wartosc zdobyczy, nie tylko koszt zdobycia. Lekcja z kampanii, w
+        # ktorej zdobyte miasta okazaly sie bezuzyteczne: bez drog, bez portu
+        # i bez budynkow miasto jest obciazeniem, a nie nabytkiem.
+        moje_kafle = {(int(r.get("x") or 0), int(r.get("y") or 0))
+                      for r in (s._sections[s.me.slot].table("c").dicts()
+                                if s._sections[s.me.slot].table("c") else [])}
+        stolica = None
+        for r in (s._sections[s.me.slot].table("c").dicts()
+                  if s._sections[s.me.slot].table("c") else []):
+            if "Palace" in set(s._bits(r.get("improvements"))):
+                stolica = (int(r["x"]), int(r["y"]))
+        siec = None
+        try:
+            merch = next((u for u in rs.units.values()
+                          if "TradeRoute" in u.flags or "HelpWonder" in u.flags), None)
+            if merch is not None:
+                ok = passability(rs, tmap, rs.uclass_of(merch).name)
+                siec = regions(tmap, ok, self.geom)
+        except Exception:  # noqa: BLE001
+            siec = None
+        moje_obszary = {siec.get(k) for k in moje_kafle} if siec else set()
+
+        def zdobycz(x: int, y: int, blds: set[str], rozmiar: int) -> dict:
+            okolica = collections.Counter()
+            drogi = 0
+            for nb in self.geom.neighbours(x, y):
+                nm = tmap.terrain(*nb)
+                if nm:
+                    okolica[nm] += 1
+                if tmap.has_road(*nb):
+                    drogi += 1
+            nadmorskie = any(
+                rs.terrains.get(tmap.terrain(*nb)) is not None
+                and not rs.terrains[tmap.terrain(*nb)].is_land
+                for nb in self.geom.neighbours(x, y) if tmap.terrain(*nb))
+            dyst = (self.geom.real_distance((x, y), stolica)
+                    if stolica else None)
+            budynki = sorted(b for b in blds
+                             if rs.buildings.get(b) and not rs.buildings[b].is_wonder)
+            polaczone = (siec.get((x, y)) in moje_obszary) if siec else None
+            # prosta ocena: co realnie dostaje panstwo
+            ocena = rozmiar * 2 + len(budynki) * 3 + drogi
+            if nadmorskie:
+                ocena += 4
+            if polaczone:
+                ocena += 6
+            if dyst is not None:
+                ocena -= dyst // 5
+            return {
+                "budynki": budynki,
+                "nadmorskie": nadmorskie,
+                "drog_wokol": drogi,
+                "polaczone_z_moja_siecia": polaczone,
+                "dystans_do_mojej_stolicy": dyst,
+                "otoczenie": dict(okolica.most_common(4)),
+                "ocena_zdobyczy": ocena,
+            }
         # przy pokoju wojsko NIE wejdzie na cudze terytorium (movement.c: MR_PEACE),
         # wiec czasy marszu podajemy w dwoch wariantach
         stany = {slot: (s.me.diplomacy.get(slot, "?") if s.me else "?")
@@ -1097,6 +1424,7 @@ class Intel:
                     "moich_w_zasiegu": w_zasiegu,
                     "najblizszy_dystans": najblizej,
                     "tur_marszu": marsz,
+                    "wartosc_zdobyczy": zdobycz(x, y, blds, rozmiar),
                     "stan_dyplomatyczny": stany.get(slot, "?"),
                     **({"tur_marszu_bez_wypowiedzenia_wojny": marsz_pokoj}
                        if stany.get(slot) == "Peace" else {}),
@@ -1763,7 +2091,7 @@ class Intel:
             return ""
 
         def dist(a, b) -> int:
-            return max(abs(a[0] - b[0]), abs(a[1] - b[1]))
+            return self.geom.real_distance(a, b)
 
         cands = []
         for mc in my:
@@ -1798,7 +2126,7 @@ class Intel:
                     "stan_dyplomatyczny": rel,
                     "typ_trasy": kind, "procent_wartosci": value_pct,
                     "miedzykontynentalna": ic,
-                    "dystans": d, "ocena": score,
+                    "dystans": d, "ocena": score, "_xy": (fc.x, fc.y),
                 })
         cands.sort(key=lambda c: -c["ocena"])
 
@@ -1817,6 +2145,86 @@ class Intel:
             picked.append(c)
             if len(picked) >= limit:
                 break
+
+        # --- ile tur karawana tam idzie
+        # Wartosc trasy bez czasu dostawy jest myląca: 200% za trzydziesci tur
+        # marszu jest gorsze niz 100% za piec. Klasa kupiecka chodzi wylacznie
+        # po drogach, kolei i rzekach albo plynie statkiem - wiec liczymy trzy
+        # warianty: ladem, morzem z portu do portu, oraz mieszany (dojscie do
+        # wlasnego portu i przeprawa).
+        tmap = TerrainMap(s)
+        ct = city_tiles(s)
+        merch = next((u for u in rs.units.values()
+                      if "HelpWonder" in u.flags or "TradeRoute" in u.flags), None)
+        znane = _known_techs(s)
+        ship = next((u for u in sorted(rs.units.values(),
+                                       key=lambda x: -x.move_rate)
+                     if rs.uclass_of(u).name == "Sea" and "NonMil" in u.flags
+                     and all(t in znane for t in u.req_techs())), None)
+
+        def coastal(tile: tuple[int, int]) -> bool:
+            for nb in self.geom.neighbours(*tile):
+                name = tmap.terrain(*nb)
+                terr = rs.terrains.get(name) if name else None
+                if terr is not None and not terr.is_land:
+                    return True
+            return False
+
+        moje_porty = [(m.name, (m.x, m.y)) for m in my if coastal((m.x, m.y))]
+
+        def ladem(a, b):
+            if merch is None:
+                return None
+            return march_turns(rs, tmap, self.geom, merch, a, b,
+                               max_nodes=40000, cities=ct)
+
+        def morzem(a, b):
+            if ship is None or not (coastal(a) and coastal(b)):
+                return None
+            return march_turns(rs, tmap, self.geom, ship, a, b,
+                               max_nodes=60000, cities=ct)
+
+        def dostawa(a, b):
+            warianty = []
+            l = ladem(a, b)
+            if l is not None:
+                warianty.append((l + 1, "lądem po drogach", None))
+            m = morzem(a, b)
+            if m is not None:
+                warianty.append((m + 2, "statkiem z portu", None))  # +zaladunek
+            if not coastal(a):
+                for nazwa, port in moje_porty:
+                    do_portu = ladem(a, port)
+                    if do_portu is None:
+                        continue
+                    rejs = morzem(port, b)
+                    if rejs is None:
+                        continue
+                    warianty.append((do_portu + rejs + 3,
+                                     f"lądem do portu {nazwa}, dalej statkiem",
+                                     nazwa))
+            if not warianty:
+                return None, "brak połączenia dla klasy kupieckiej", None
+            best = min(warianty)
+            return best[0], best[1], best[2]
+
+        for c in picked:
+            a = next(((m.x, m.y) for m in my if m.name == c["moje_miasto"]), None)
+            bxy = c.pop("_xy", None)
+            if a is None or bxy is None:
+                continue
+            tur, jak, port = dostawa(a, bxy)
+            c["tur_dostawy"] = tur
+            c["czym"] = jak
+            if port:
+                c["przez_port"] = port
+            c["moje_miasto_portowe"] = coastal(a)
+            c["partner_portowy"] = coastal(bxy)
+            c["ocena_na_ture"] = round(c["ocena"] / tur, 2) if tur else None
+        for c in cands:
+            c.pop("_xy", None)
+
+        picked.sort(key=lambda c: -(c.get("ocena_na_ture") or 0))
 
         martwe = sorted({k for k, v in pct.items() if v <= 0})
         return {
@@ -2278,6 +2686,14 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_alerts(self, args: dict) -> dict:
+        return self._need_intel().alerts(self._intel_ruleset())
+
+    def ai_city_defense(self, args: dict) -> dict:
+        return self._need_intel().city_defense(
+            self._intel_ruleset(), str(args.get("miasto", "")),
+            str(args.get("napastnik", "")), int(args.get("limit") or 8))
 
     def ai_mobility(self, args: dict) -> dict:
         return self._need_intel().mobility(

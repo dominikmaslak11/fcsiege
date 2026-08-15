@@ -28,6 +28,10 @@ def main() -> int:
         return api_main(argv[1:])
 
     from fcsiege.app import main as gui_main
+    if argv and argv[0] == "watch":
+        from fcsiege.cli_watch import main as watch_main
+        return watch_main(argv[1:])
+
     lang = None
     for a in argv:
         if a.startswith(("--lang=", "--jezyk=")):
