@@ -871,6 +871,351 @@ class Intel:
 
 
 
+
+
+    # ------------------------------------------------------- potencjal wzrostu
+
+    def growth_potential(self, rs, miasto: str = "", limit: int = 10) -> dict:
+        """Dlaczego miasto nie rosnie i ile pracy kosztuje to naprawic.
+
+        Trzy rozne przyczyny wygladaja tak samo z zewnatrz: limit wielkosci,
+        deficyt utrzymania na zywnosci albo po prostu jalowa ziemia. Rozdzielamy
+        je, a przy ziemi liczymy, co dalby sie z nia zrobic: irygacja podnosi
+        zywnosc od reki, przemiana terenu bardziej, ale kosztuje wielokrotnie
+        wiecej tur pracy. Wszystkie liczby z terrain.ruleset.
+        """
+        import os
+
+        from .registry import parse_file
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        if not rows:
+            return {"blad": "brak miast"}
+
+        # plony, surowce i przemiany wprost z regul
+        plony: dict[str, dict] = {}
+        surowce: dict[str, int] = {}
+        path = os.path.join(rs.path, "terrain.ruleset")
+        if os.path.exists(path):
+            reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+            for t in reg.prefixed("resource_"):
+                nm = clean_name(t.str("rule_name") or t.str("name"))
+                if nm:
+                    surowce[nm] = t.int("food")
+            for t in reg.prefixed("terrain_"):
+                nm = clean_name(t.str("rule_name") or t.str("name"))
+                plony[nm] = {
+                    "zywnosc": t.int("food"),
+                    "tarcze": t.int("shield"),
+                    "handel": t.int("trade"),
+                    "irygacja_daje": t.int("irrigation_food_incr"),
+                    "irygacja_tur": t.int("irrigation_time"),
+                    "przemiana_w": clean_name(t.str("transform_result")),
+                    "przemiana_tur": t.int("transform_time"),
+                }
+
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+
+        base, steps = 0, []
+        for eff in rs.effects_by_type.get("Unit_Upkeep_Free_Per_City", []):
+            if [x.name for x in eff.reqs if x.type == "OutputType"] != ["Food"]:
+                continue
+            if [x for x in eff.reqs if x.type == "Gov"]:
+                continue
+            sizes = [int(x.name) for x in eff.reqs
+                     if x.type == "MinSize" and str(x.name).isdigit()]
+            if sizes:
+                steps.extend([sizes[0]] * eff.value)
+            else:
+                base += eff.value
+        steps.sort()
+
+        jedzacy = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and getattr(ut, "uk_food", 0) > 0:
+                jedzacy[u.homecity] += 1
+
+        wybrane = [r for r in rows
+                   if not miasto or str(r.get("name", "")).lower() == miasto.lower()]
+        if miasto and not wybrane:
+            return {"blad": f"nie mam miasta {miasto}",
+                    "dostepne": sorted(str(r.get("name")) for r in rows)}
+
+        out = []
+        for r in wybrane:
+            x, y = int(r["x"]), int(r["y"])
+            size = int(r.get("size") or 0)
+            blds = set(s._bits(r.get("improvements")))
+            cap, unlim = 0, False
+            for eff in rs.effects_by_type.get("Size_Adj", []):
+                need = [q for q in eff.reqs if q.type == "Building"]
+                if all((q.name in blds) == q.present for q in need):
+                    cap += eff.value
+            for eff in rs.effects_by_type.get("Size_Unlimit", []):
+                need = [q for q in eff.reqs if q.type == "Building"]
+                if need and all((q.name in blds) == q.present for q in need):
+                    unlim = True
+            wolne = base + sum(1 for m in steps if size >= m)
+            deficyt = max(0, jedzacy.get(int(r.get("id") or 0), 0) - wolne)
+
+            # miasto obrabia obszar o promieniu 2 (city_radius_sq), a nie samo
+            # sasiedztwo, i obsadza tyle kafli, ilu ma obywateli
+            obszar = []
+            for dx in range(-3, 4):
+                for dy in range(-4, 5):
+                    if (dx, dy) == (0, 0):
+                        continue
+                    nb = ((x + dx) % self.geom.xsize,
+                          (y + dy) % self.geom.ysize)
+                    if self.geom.real_distance((x, y), nb) <= 2:
+                        obszar.append(nb)
+
+            ma_port = "Harbour" in blds or "Harbor" in blds
+            port_bonus = 0
+            if ma_port:
+                for eff in rs.effects_by_type.get("Output_Add_Tile", []):
+                    outs = [q.name for q in eff.reqs if q.type == "OutputType"]
+                    bl = [q.name for q in eff.reqs if q.type == "Building" and q.present]
+                    if outs == ["Food"] and bl and bl[0] in blds:
+                        port_bonus += eff.value
+
+            kafle, zysk_irygacja, zysk_przemiana, praca = [], 0, 0, 0
+            for nb in obszar:
+                nm = tmap.terrain(*nb)
+                if nm is None or nm not in plony:
+                    continue
+                p = plony[nm]
+                teraz = p["zywnosc"]
+                # surowiec na kaflu i port podnosza plon, a to potrafi zdecydowac
+                surowiec = next((r for r, f in surowce.items()
+                                 if f and tmap.has_extra(r, *nb)), None)
+                if surowiec:
+                    teraz += surowce[surowiec]
+                if ma_port and not rs.terrains[nm].is_land:
+                    teraz += port_bonus
+                ma_irygacje = tmap.has_extra("Irrigation", *nb)
+                mozliwa_irygacja = p["irygacja_daje"] > 0 and not ma_irygacje
+                cel = p["przemiana_w"]
+                po_przemianie = None
+                if cel and cel in plony:
+                    po_przemianie = plony[cel]["zywnosc"] + plony[cel]["irygacja_daje"]
+                wpis = {
+                    "kafel": [nb[0], nb[1]], "teren": nm,
+                    **({"surowiec": surowiec} if surowiec else {}),
+                    "zywnosc_teraz": teraz + (p["irygacja_daje"] if ma_irygacje else 0),
+                    "irygowany": ma_irygacje,
+                }
+                if mozliwa_irygacja:
+                    wpis["irygacja_da"] = p["irygacja_daje"]
+                    wpis["irygacja_tur_pracy"] = p["irygacja_tur"]
+                    zysk_irygacja += p["irygacja_daje"]
+                    praca += p["irygacja_tur"]
+                if po_przemianie is not None and po_przemianie > wpis["zywnosc_teraz"]:
+                    wpis["przemiana_w"] = cel
+                    wpis["przemiana_da"] = po_przemianie - wpis["zywnosc_teraz"]
+                    wpis["przemiana_tur_pracy"] = p["przemiana_tur"]
+                    zysk_przemiana += po_przemianie - wpis["zywnosc_teraz"]
+                kafle.append(wpis)
+            # obywatele obsadzaja najlepsze kafle, po jednym na glowe
+            najlepsze = sorted(kafle, key=lambda k: -k["zywnosc_teraz"])[:size]
+            centrum = plony.get(tmap.terrain(x, y), {}).get("zywnosc", 1)
+            zywnosc_teraz = sum(k["zywnosc_teraz"] for k in najlepsze) + max(1, centrum)
+            kafle.sort(key=lambda k: -(k.get("przemiana_da", 0)
+                                       + k.get("irygacja_da", 0)))
+
+            if not unlim and cap and size >= cap:
+                powod = f"limit wielkości {cap} — potrzebna kanalizacja"
+            elif deficyt:
+                powod = (f"deficyt utrzymania: {jedzacy.get(int(r.get('id') or 0), 0)} "
+                         f"jednostek na żywności przy {wolne} darmowych")
+            elif zywnosc_teraz < size * 2:
+                powod = (f"jałowa ziemia: {size} najlepszych kafli plus centrum "
+                         f"dają {zywnosc_teraz} żywności, a {size} obywateli "
+                         f"zjada {size * 2}")
+            else:
+                powod = "rośnie normalnie"
+
+            out.append({
+                "miasto": str(r.get("name")), "x": x, "y": y, "rozmiar": size,
+                "teren_miasta": tmap.terrain(x, y),
+                "limit_wielkosci": "bez limitu" if unlim else cap,
+                "deficyt_utrzymania": deficyt,
+                "kafli_w_zasiegu": len(kafle),
+                "zywnosc_z_obrabianych_kafli": zywnosc_teraz,
+                "zjadaja_obywatele": size * 2,
+                "powod": powod,
+                "zysk_z_irygacji": zysk_irygacja,
+                "zysk_z_przemiany": zysk_przemiana,
+                "tur_pracy_na_irygacje": praca,
+                "kafle": kafle[:limit],
+            })
+        out.sort(key=lambda c: -(c["zysk_z_irygacji"] + c["zysk_z_przemiany"]))
+        return {
+            "miasta": out,
+            "jak_czytac": (
+                "irygacja działa od ręki i jest tania; przemiana terenu daje "
+                "więcej, ale kosztuje wielokrotnie więcej tur pracy. Obywatel "
+                "zjada 2 żywności, więc miasto rozmiaru N potrzebuje 2N tylko "
+                "na wyżywienie siebie."),
+            "czego_nie_liczymy": (
+                "które kafle miasto faktycznie obrabia — zapis nie przechowuje "
+                "przydziału obywateli do kafli, więc bierzemy całe sąsiedztwo"),
+        }
+
+    # ------------------------------------------------------------ dyplomacja
+
+    def diplomacy(self, rs) -> dict:
+        """Co sie stanie z kazdym ukladem i co realnie wplywa na decyzje AI.
+
+        Uwaga na nazewnictwo, bo myli sie najczesciej: **rozejm (Armistice)
+        sam zamienia sie w POKOJ**, a **zawieszenie broni (Cease-fire) wygasa
+        do WOJNY**. Odliczanie jest deterministyczne (srv_main.c), wiec te
+        liczby sa pewne. Nastawienia AI (`love`) zapis nie przechowuje, wiec
+        zamiast zmyslonego prawdopodobienstwa podajemy przeslanki, ktorymi AI
+        sie kieruje: sile stron, wspolnych wrogow, ambasady i to, czy druga
+        strona ma powod do zerwania.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        sec = s._sections[s.me.slot]
+        tbl = sec.table("diplstate")
+        stany = {}
+        for idx, r in enumerate(tbl.dicts() if tbl else []):
+            stany[idx] = {
+                "stan": str(r.get("current") or "?"),
+                "najblizszy_kiedykolwiek": str(r.get("closest") or "?"),
+                "turns_left": int(r.get("turns_left") or 0),
+                "ma_powod_do_zerwania": bool(int(r.get("has_reason_to_cancel") or 0)),
+                "ambasada": bool(r.get("embassy")),
+            }
+
+        # sila stron: jednostki bojowe i miasta
+        def sila(slot: int) -> dict:
+            bojowe = 0
+            for u in s.units_of(slot):
+                ut = rs.units.get(u.type)
+                if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                    bojowe += 1
+            zaczepne = sum(
+                1 for u in s.units_of(slot)
+                if (ut := rs.units.get(u.type)) and ut.attack > 1
+                and "NonMil" not in ut.flags)
+            ss = s._sections.get(slot)
+            tb = ss.table("c") if ss else None
+            miasta = list(tb.dicts()) if tb else []
+            return {"jednostek_bojowych": bojowe, "zdolnych_do_ataku": zaczepne,
+                    "miast": len(miasta),
+                    "ludnosci": sum(int(c.get("size") or 0) for c in miasta),
+                    "zloto": ss.int("gold") if ss else 0}
+
+        moja = sila(s.me.slot)
+        # kto z kim wojuje - wspolny wrog jest najsilniejsza przeslanka ukladu
+        wojny = {}
+        for slot, ss in s._sections.items():
+            if slot not in s.players:
+                continue
+            t2 = ss.table("diplstate")
+            wojny[slot] = {i for i, r in enumerate(t2.dicts() if t2 else [])
+                           if str(r.get("current")) == "War"}
+
+        # jednostki, ktore zginą przy przejsciu rozejmu w pokoj
+        zagrozone = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if not ut or "NonMil" in ut.flags:
+                continue                       # cywile moga wchodzic w granice
+            o = tmap.owner(u.x, u.y)
+            if o is None or o == s.me.slot:
+                continue
+            if stany.get(o, {}).get("stan") == "Armistice":
+                zagrozone[o] += 1
+
+        out = []
+        for slot, info in stany.items():
+            if slot == s.me.slot or slot not in s.players:
+                continue
+            stan = info["stan"]
+            if stan in ("Never met", "?"):
+                continue
+            ich = sila(slot)
+            wspolni = sorted(s.players[x].nation for x in
+                             (wojny.get(slot, set()) & wojny.get(s.me.slot, set()))
+                             if x in s.players)
+            if stan == "Armistice":
+                co_dalej = "pokój — automatycznie, bez pytania o zgodę"
+                ryzyko = "brak; rozejm nie wygasa do wojny"
+            elif stan == "Cease-fire":
+                co_dalej = "WOJNA — zawieszenie broni wygasa"
+                ryzyko = ("wysokie: po wygaśnięciu wracacie do wojny, "
+                          "trzeba wynegocjować pokój wcześniej")
+            elif stan == "War":
+                co_dalej = "trwa, dopóki ktoś nie zaproponuje układu"
+                ryzyko = "—"
+            else:
+                co_dalej = "stan trwały"
+                ryzyko = "—"
+            przeslanki = []
+            if ich["zdolnych_do_ataku"] == 0:
+                przeslanki.append("nie ma ani jednej jednostki zdolnej do "
+                                  "natarcia — nie ma czym prowadzić wojny")
+            if moja["jednostek_bojowych"] > 5 * max(1, ich["jednostek_bojowych"]):
+                przeslanki.append("przewaga militarna po Twojej stronie "
+                                  "jest miażdżąca, co sprzyja układowi")
+            if wspolni:
+                przeslanki.append(f"wspólny wróg: {', '.join(wspolni)}")
+            if not info["ambasada"]:
+                przeslanki.append("brak ambasady — negocjacje trudniejsze, "
+                                  "rozważ dyplomatę")
+            if info["ma_powod_do_zerwania"]:
+                przeslanki.append("ma formalny powód do zerwania układu")
+            out.append({
+                "nacja": s.players[slot].nation,
+                "stan": stan,
+                "tur_do_zmiany": info["turns_left"] or None,
+                "co_sie_stanie": co_dalej,
+                "ryzyko": ryzyko,
+                "najblizszy_kiedykolwiek": info["najblizszy_kiedykolwiek"],
+                "ambasada": info["ambasada"],
+                "ich_sila": ich,
+                "moje_jednostki_do_rozwiazania": zagrozone.get(slot, 0),
+                "przeslanki": przeslanki,
+            })
+        porzadek = {"Cease-fire": 0, "War": 1, "Armistice": 2, "Peace": 3,
+                    "Alliance": 4}
+        out.sort(key=lambda d: (porzadek.get(d["stan"], 9),
+                                d["tur_do_zmiany"] or 99))
+        return {
+            "moja_sila": moja,
+            "uklady": out,
+            "wygasa_do_wojny": [d["nacja"] for d in out
+                                if d["stan"] == "Cease-fire"],
+            "stanie_sie_pokojem": [d["nacja"] for d in out
+                                   if d["stan"] == "Armistice"],
+            "jak_to_dziala": (
+                "Rozejm (Armistice) odlicza tury i sam zamienia się w pokój; "
+                "przy tej zmianie Twoje jednostki wojskowe stojące na cudzym "
+                "terytorium zostają ROZWIĄZANE (srv_main.c, "
+                "remove_illegal_armistice_units). Zawieszenie broni "
+                "(Cease-fire) odlicza tury i wygasa do WOJNY — to jedyny stan, "
+                "który wymaga działania przed czasem."),
+            "czego_nie_wiem": (
+                "zapis nie przechowuje nastawienia AI (`love`), więc nie podaję "
+                "prawdopodobieństwa przyjęcia układu — tylko deterministyczne "
+                "terminy i przesłanki, którymi AI się kieruje"),
+        }
+
     # ----------------------------------------------------------- ostrzezenia
 
     def alerts(self, rs) -> dict:
@@ -996,6 +1341,60 @@ class Intel:
                     "rada": "zawróć nadmiar do garnizonu; w mieście te same "
                             "jednostki robią zadowolonych przez stan wojenny",
                 })
+
+        # --- miasta, ktore nie rosna: rozdzielamy przyczyne i podajemy lek
+        try:
+            wzrost = self.growth_potential(rs)
+        except Exception:  # noqa: BLE001 - alerty maja dzialac nawet bez tego
+            wzrost = {"miasta": []}
+        for c in wzrost.get("miasta", []):
+            if c["powod"].startswith("rośnie"):
+                continue
+            if c["deficyt_utrzymania"]:
+                continue                       # juz zgloszone wyzej, nie dubluj
+            if str(c["limit_wielkosci"]) != "bez limitu" and \
+                    c["rozmiar"] >= (c["limit_wielkosci"] or 0):
+                alerty.append({
+                    "waga": "warte uwagi", "tur_do_szkody": None,
+                    "miasto": c["miasto"], "rodzaj": "miasto uderzyło w limit wielkości",
+                    "co_sie_dzieje": f"rozmiar {c['rozmiar']} przy limicie "
+                                     f"{c['limit_wielkosci']}",
+                    "rada": "dobuduj akwedukt, a przy limicie 16 kanalizację "
+                            "(Sanitation)",
+                })
+                continue
+            brak = c["zjadaja_obywatele"] - c["zywnosc_z_obrabianych_kafli"]
+            if brak <= 0:
+                continue
+            naj = None
+            for k in c["kafle"]:
+                for rodzaj, daje, tur in (("irygacja", k.get("irygacja_da"),
+                                           k.get("irygacja_tur_pracy")),
+                                          ("przemiana w " + str(k.get("przemiana_w")),
+                                           k.get("przemiana_da"),
+                                           k.get("przemiana_tur_pracy"))):
+                    if not daje or not tur:
+                        continue
+                    koszt = tur / daje
+                    if naj is None or koszt < naj[0]:
+                        naj = (koszt, rodzaj, daje, tur, k["teren"], k["kafel"])
+            rada = ("brak kafli, które da się poprawić — to miasto nie urośnie "
+                    "bez zmiany otoczenia; traktuj je jako produkcyjne")
+            if naj:
+                _koszt, rodzaj, daje, tur, teren, kafel = naj
+                rada = (f"najtaniej: {rodzaj} na kaflu {kafel} ({teren}) — "
+                        f"+{daje} żywności za {tur} tur pracy robotnika. "
+                        f"Do wyjścia na zero brakuje {brak} żywności; "
+                        f"łącznie irygacja da +{c['zysk_z_irygacji']}, "
+                        f"przemiana terenu +{c['zysk_z_przemiany']}")
+            alerty.append({
+                "waga": "warte uwagi", "tur_do_szkody": None,
+                "miasto": c["miasto"], "rodzaj": "wzrost zatrzymany przez jałową ziemię",
+                "co_sie_dzieje": (f"obrabiane kafle dają {c['zywnosc_z_obrabianych_kafli']} "
+                                  f"żywności, a {c['rozmiar']} obywateli zjada "
+                                  f"{c['zjadaja_obywatele']}"),
+                "rada": rada,
+            })
 
         kolejnosc = {"krytyczne": 0, "pilne": 1, "warte uwagi": 2}
         alerty.sort(key=lambda a: (kolejnosc.get(a["waga"], 9),
@@ -2686,6 +3085,14 @@ class IntelMixin:
     def ai_nation(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))
         return self._need_intel().nation(str(args.get("nacja", "")), full)
+
+    def ai_growth(self, args: dict) -> dict:
+        return self._need_intel().growth_potential(
+            self._intel_ruleset(), str(args.get("miasto", "")),
+            int(args.get("limit") or 10))
+
+    def ai_diplomacy(self, args: dict) -> dict:
+        return self._need_intel().diplomacy(self._intel_ruleset())
 
     def ai_alerts(self, args: dict) -> dict:
         return self._need_intel().alerts(self._intel_ruleset())

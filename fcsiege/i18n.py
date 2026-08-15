@@ -365,6 +365,24 @@ KEYS: dict[str, str] = {
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
+    "uklady": "treaties", "tur_do_zmiany": "turns_to_change",
+    "co_sie_stanie": "what_will_happen", "ryzyko": "risk",
+    "najblizszy_kiedykolwiek": "closest_ever", "ambasada": "embassy",
+    "ich_sila": "their_strength", "zdolnych_do_ataku": "able_to_attack",
+    "moje_jednostki_do_rozwiazania": "my_units_to_be_disbanded",
+    "przeslanki": "considerations", "moja_sila": "my_strength",
+    "wygasa_do_wojny": "expires_into_war", "stanie_sie_pokojem": "becomes_peace",
+    "jak_to_dziala": "how_it_works", "ludnosci": "population",
+    "limit_wielkosci": "size_cap", "deficyt_utrzymania": "upkeep_deficit",
+    "zywnosc_z_obrabianych_kafli": "food_from_worked_tiles",
+    "kafli_w_zasiegu": "tiles_in_radius",
+    "zjadaja_obywatele": "citizens_eat", "powod": "reason",
+    "zysk_z_irygacji": "gain_from_irrigation", "zysk_z_przemiany": "gain_from_transform",
+    "tur_pracy_na_irygacje": "worker_turns_for_irrigation", "kafle": "tiles",
+    "kafel": "tile", "zywnosc_teraz": "food_now", "irygowany": "irrigated",
+    "irygacja_da": "irrigation_adds", "irygacja_tur_pracy": "irrigation_worker_turns",
+    "przemiana_w": "transform_into", "przemiana_da": "transform_adds",
+    "przemiana_tur_pracy": "transform_worker_turns", "jak_czytac": "how_to_read",
     "alertow": "alerts_count", "krytycznych": "critical", "pilnych": "urgent",
     "waga": "severity", "tur_do_szkody": "turns_to_harm", "rodzaj": "kind",
     "co_sie_dzieje": "what_is_happening", "rada": "advice",
@@ -521,6 +539,8 @@ TOOL_NAMES: dict[str, str] = {
     "gotowosc_wojenna": "war_readiness",
     "mobilnosc": "mobility",
     "alerty": "alerts",
+    "uklady_dyplomatyczne": "treaties",
+    "potencjal_wzrostu": "growth_potential",
     "obrona_miasta": "city_defense",
     "korupcja": "waste",
     "moje_technologie": "my_technologies",
@@ -587,6 +607,22 @@ TOOL_DESC: dict[str, str] = {
         "The list of eras in the current ruleset with the tech-tree step that "
         "opens each one and what becomes available at that step: units, "
         "buildings and wonders.",
+    "potencjal_wzrostu":
+        "Why a city is not growing and how much labour it costs to fix. It "
+        "separates three causes that look identical from outside: the size cap "
+        "(a sewer system is needed), a food-upkeep deficit (too many units "
+        "homed there), or simply barren land. For land it works out, tile by "
+        "tile, what irrigation would add and what transforming the terrain "
+        "would add, together with the worker-turns each takes — all read from "
+        "terrain.ruleset.",
+    "uklady_dyplomatyczne":
+        "What happens to every treaty and when. The distinction that trips "
+        "people up most: an ARMISTICE counts down and turns into PEACE by "
+        "itself, while a CEASE-FIRE counts down and expires into WAR. Reports "
+        "turns to change, the units that will be disbanded when an armistice "
+        "becomes peace, the other side's strength, shared enemies and embassy "
+        "status. It does not report a probability of a treaty being accepted, "
+        "because the savegame does not store the AI's attitude.",
     "alerty":
         "Scans the loaded savegame and returns everything that is going wrong, "
         "ordered by urgency, each with the number of turns until the damage "

@@ -439,6 +439,37 @@ przejezdne dla danej klasy i mówi, ile twoich jednostek stoi w którym obszarze
 oraz do których miast wroga faktycznie dotrą. Najsilniejsza jednostka jest
 bezużyteczna, jeśli utknie po drugiej stronie bagna.
 
+### Dyplomacja
+
+`uklady_dyplomatyczne` rozdziela dwa stany, które mylą się najczęściej, bo
+w polszczyźnie oba bywają „rozejmem", a skutki mają przeciwne:
+
+| stan | co robi odliczanie | źródło |
+|---|---|---|
+| **Armistice** | sam zamienia się w **POKÓJ** | `srv_main.c`: `state->type = DS_PEACE` |
+| **Cease-fire** | wygasa do **WOJNY** | `srv_main.c`: „cease-fire has run out" |
+
+Przy przejściu rozejmu w pokój Twoje jednostki **wojskowe** stojące na cudzym
+terytorium zostają **rozwiązane**, nie odesłane (`remove_illegal_armistice_units`
+woła `wipe_unit`). Narzędzie wylicza, ile ich jest, dla każdej nacji osobno.
+
+Czego świadomie **nie** podaje: prawdopodobieństwa przyjęcia układu. Zapis nie
+przechowuje nastawienia AI (`love`), więc zamiast zmyślonej liczby dostajesz
+przesłanki, którymi AI się kieruje: siłę stron, wspólnych wrogów, ambasady
+i to, czy druga strona ma formalny powód do zerwania.
+
+### Potencjał wzrostu
+
+`potencjal_wzrostu` rozdziela trzy przyczyny zatrzymanego wzrostu, które
+z zewnątrz wyglądają tak samo: limit wielkości, deficyt utrzymania na żywności
+i jałowa ziemia. Przy ziemi podaje dla każdego kafla, ile da irygacja, a ile
+przemiana terenu, wraz z liczbą tur pracy robotnika.
+
+Model liczy obszar o promieniu 2 (a nie samo sąsiedztwo), obsadza tyle kafli,
+ilu miasto ma obywateli, i uwzględnia **surowce na kaflach** oraz **port**
+(+1 żywności z kafla morskiego). Bez tych dwóch składników narzędzie oznaczało
+22 z 29 miast jako głodujące, co było błędem modelu, a nie diagnozą.
+
 ### Ostrzeżenia i tryb nasłuchu
 
 `alerty` skanuje wczytany zapis i zwraca to, co się psuje — posortowane wg

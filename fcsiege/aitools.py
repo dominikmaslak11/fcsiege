@@ -300,6 +300,40 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "potencjal_wzrostu",
+        "description": (
+            "Dlaczego miasto nie rośnie i ile pracy kosztuje to naprawić. "
+            "Rozdziela trzy przyczyny, które z zewnątrz wyglądają tak samo: "
+            "limit wielkości (potrzebna kanalizacja), deficyt utrzymania na "
+            "żywności (za dużo jednostek macierzystych) albo jałowa ziemia. "
+            "Przy ziemi wylicza dla każdego sąsiedniego kafla, ile da "
+            "irygacja i ile przemiana terenu, wraz z liczbą tur pracy — "
+            "wszystko z terrain.ruleset."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "miasto": {"type": "string", "description": "puste = wszystkie"},
+                "limit": {"type": "integer", "description": "ile kafli pokazać"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "uklady_dyplomatyczne",
+        "description": (
+            "Co się stanie z każdym układem i kiedy. Kluczowe rozróżnienie, "
+            "które myli się najczęściej: ROZEJM (Armistice) odlicza tury i sam "
+            "zamienia się w POKÓJ, a ZAWIESZENIE BRONI (Cease-fire) wygasa do "
+            "WOJNY. Podaje tury do zmiany, jednostki, które zostaną rozwiązane "
+            "przy przejściu rozejmu w pokój, siłę drugiej strony, wspólnych "
+            "wrogów i status ambasady. Nie podaje prawdopodobieństwa przyjęcia "
+            "układu, bo zapis nie przechowuje nastawienia AI."
+        ),
+        "input_schema": {"type": "object", "properties": {},
+                         "additionalProperties": False},
+    },
+    {
         "name": "alerty",
         "description": (
             "Skanuje wczytany zapis i zwraca listę rzeczy, które się psują, "
@@ -598,6 +632,8 @@ TOOL_METHOD = {
     "mobilnosc": "ai_mobility",
     "obrona_miasta": "ai_city_defense",
     "alerty": "ai_alerts",
+    "uklady_dyplomatyczne": "ai_diplomacy",
+    "potencjal_wzrostu": "ai_growth",
 }
 
 
@@ -703,6 +739,10 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_city_defense(dict(args))
     if name == "alerty":
         return bridge.ai_alerts(dict(args))
+    if name == "uklady_dyplomatyczne":
+        return bridge.ai_diplomacy(dict(args))
+    if name == "potencjal_wzrostu":
+        return bridge.ai_growth(dict(args))
     return {"blad": f"{i18n._('nieznane narzędzie')}: {name}"}
 
 
