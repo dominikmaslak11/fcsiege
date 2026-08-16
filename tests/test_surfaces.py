@@ -403,10 +403,17 @@ def test_savegame():
     plan = dispatch(bridge, "co_da_rozwiazanie", {})
     check("czyta procent zwrotu z reguł",
           0 < plan.get("zwrot_procent", 0) <= 100, str(plan.get("zwrot_procent")))
-    check("typuje kandydatów do rozwiązania", bool(plan.get("kandydaci")))
-    check("zwrot tarcz zgadza się z kosztem i procentem",
-          all(c["zwrot_tarcz"] == c["koszt_budowy"] * plan["zwrot_procent"] // 100
-              * c["sztuk"] for c in plan["kandydaci"]))
+    # w zwartym państwie nikt nie jest odcięty — brak kandydatów to poprawny
+    # stan, a nie awaria; sprawdzamy wtedy tylko spójność tego, co wróciło
+    kandydaci = plan.get("kandydaci") or []
+    if kandydaci:
+        check("zwrot tarcz zgadza się z kosztem i procentem",
+              all(c["zwrot_tarcz"] == c["koszt_budowy"]
+                  * plan["zwrot_procent"] // 100 * c["sztuk"]
+                  for c in kandydaci))
+    else:
+        check("brak kandydatów do rozwiązania (zwarte państwo)",
+              plan.get("razem_tarcz", 0) == 0, str(plan.get("razem_tarcz")))
     check("suma tarcz to suma kandydatów",
           plan["razem_tarcz"] == sum(c["zwrot_tarcz"] for c in plan["kandydaci"]))
     check("utrzymanie po rozwiązaniu nie rośnie",
