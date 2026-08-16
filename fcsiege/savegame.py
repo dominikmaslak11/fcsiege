@@ -4382,6 +4382,222 @@ class Intel:
                 "promien_zasiegu": max_distance,
                 "fronty": sorted(rows, key=lambda r: -r["rozmiar"])}
 
+    # ---------------------------------------------------------- robotnicy
+
+    def worker_plan(self, rs, limit: int = 40) -> dict:
+        """Gdzie stoja bezczynni robotnicy i co maja robic.
+
+        Bezczynny robotnik nie jest neutralny - kosztuje `uk_shield` tarczy
+        na ture, wiec pietnastu stojacych to pietnascie tarcz wyrzucanych
+        co ture. Dlatego narzedzie liczy najpierw koszt, a dopiero potem
+        podaje prace.
+
+        Prace sortujemy wg tego, co dane miasto naprawde potrzebuje, a nie
+        wg ogolnej zasady: kopalnia daje tarcze, ale miastu ustawionemu na
+        wzrost nie da nic, bo ono tych kafli nie obrabia.
+
+        Osobno liczymy siec drog, bo w tych regulach droga to nie ozdoba:
+        klasa Merchant nie jest natywna dla ZADNEGO terenu i karawana bez
+        ciaglej drogi nie ruszy sie z miejsca. Miasta poza siecia nie moga
+        ani wyslac, ani przyjac karawany.
+        """
+        import collections
+        import heapq
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        if not rows:
+            return {"blad": "brak moich miast"}
+
+        tmap = TerrainMap(s)
+        ct = city_tiles(s)
+        road_time = _road_build_times(rs)
+        mine_incr, road_pct = _tile_bonuses(rs)
+
+        # --- kto w ogole umie pracowac
+        robotnicy = [u for u in s.units_of(s.me.slot)
+                     if u.type in rs.units
+                     and ("Settlers" in rs.units[u.type].flags
+                          or "Workers" in rs.units[u.type].roles)]
+        if not robotnicy:
+            robotnicy = [u for u in s.units_of(s.me.slot)
+                         if u.type in rs.units
+                         and "Settlers" in rs.units[u.type].flags]
+
+        po_aktywnosci = collections.Counter(str(u.activity) for u in robotnicy)
+        bezczynni = [u for u in robotnicy if str(u.activity) == "Idle"]
+        koszt_bezczynnych = sum(rs.units[u.type].uk_shield for u in bezczynni)
+
+        miasta = {int(r.get("id") or 0): r for r in rows}
+        xy_miast = {(int(r["x"]), int(r["y"])): str(r.get("name")) for r in rows}
+
+        # --- siec drog: ktore miasta sa polaczone
+        wezly = list(xy_miast)
+        rodzic = {w: w for w in wezly}
+
+        def znajdz(a):
+            while rodzic[a] != a:
+                rodzic[a] = rodzic[rodzic[a]]
+                a = rodzic[a]
+            return a
+
+        def polacz(a, b):
+            ra, rb = znajdz(a), znajdz(b)
+            if ra != rb:
+                rodzic[ra] = rb
+
+        # przechodzimy po kaflach z droga/rzeka i sklejamy miasta, ktore
+        # laczy ciagla nitka - to jest dokladnie warunek ruchu karawany
+        def przejezdny(t):
+            return (t in ct or tmap.has_extra("Road", *t)
+                    or tmap.has_extra("River", *t))
+
+        odwiedzone = set()
+        for start in wezly:
+            if start in odwiedzone:
+                continue
+            stos, grupa = [start], []
+            odwiedzone.add(start)
+            while stos:
+                cur = stos.pop()
+                if cur in xy_miast:
+                    grupa.append(cur)
+                for nb in self.geom.neighbours(*cur):
+                    if nb in odwiedzone or not przejezdny(nb):
+                        continue
+                    odwiedzone.add(nb)
+                    stos.append(nb)
+            for g in grupa[1:]:
+                polacz(grupa[0], g)
+
+        skupiska = collections.defaultdict(list)
+        for w in wezly:
+            skupiska[znajdz(w)].append(xy_miast[w])
+        sieci = sorted(skupiska.values(), key=len, reverse=True)
+        glowna = set(sieci[0]) if sieci else set()
+
+        # --- ile pracy kosztuje dociagniecie miasta do glownej sieci
+        def brak_do_sieci(start):
+            pq = [(0, start)]
+            best = {start: 0}
+            while pq:
+                c, cur = heapq.heappop(pq)
+                if cur in xy_miast and xy_miast[cur] in glowna and cur != start:
+                    return c, xy_miast[cur]
+                if c > best.get(cur, 1 << 30):
+                    continue
+                for nb in self.geom.neighbours(*cur):
+                    nm = tmap.terrain(*nb)
+                    terr = rs.terrains.get(nm) if nm else None
+                    if terr is None or not terr.is_land:
+                        continue
+                    nxt = c + (0 if przejezdny(nb)
+                               else max(1, road_time.get(nm, 2)))
+                    if nxt < best.get(nb, 1 << 30):
+                        best[nb] = nxt
+                        heapq.heappush(pq, (nxt, nb))
+            return None, None
+
+        odciete = []
+        for w in wezly:
+            nazwa = xy_miast[w]
+            if nazwa in glowna:
+                continue
+            praca, do_kogo = brak_do_sieci(w)
+            odciete.append({
+                "miasto": nazwa,
+                "tur_pracy_do_sieci": praca,
+                "najblizsze_w_sieci": do_kogo,
+                "uwaga": ("brak połączenia lądowego — drogi nie da się "
+                          "poprowadzić" if praca is None else
+                          "karawana stąd nie wyjedzie, dopóki nie ma drogi"),
+            })
+        odciete.sort(key=lambda r: (r["tur_pracy_do_sieci"] is None,
+                                    r["tur_pracy_do_sieci"] or 0))
+
+        # --- co robic konkretnym bezczynnym: bierzemy najblizsza sensowna
+        #     robote, wazac to, czego miasto potrzebuje
+        def prace_wokol(cx, cy, promien=3):
+            out = []
+            for dx in range(-promien, promien + 1):
+                for dy in range(-promien - 1, promien + 2):
+                    nb = ((cx + dx) % self.geom.xsize,
+                          (cy + dy) % self.geom.ysize)
+                    d = self.geom.real_distance((cx, cy), nb)
+                    if d > promien:
+                        continue
+                    nm = tmap.terrain(*nb)
+                    terr = rs.terrains.get(nm) if nm else None
+                    if terr is None or not terr.is_land:
+                        continue
+                    wl = tmap.owner(*nb)
+                    if wl is not None and wl != s.me.slot:
+                        continue
+                    if (not tmap.has_extra("Irrigation", *nb)
+                            and (terr.irrigation_food_incr or 0) > 0):
+                        out.append({
+                            "kafel": list(nb), "teren": nm, "praca": "irygacja",
+                            "daje": f"+{terr.irrigation_food_incr} żywności",
+                            "tur_pracy": terr.irrigation_time, "dystans": d,
+                            "waga": 3 * (terr.irrigation_food_incr or 0),
+                        })
+                    if not tmap.has_extra("Road", *nb) and nm not in ("Lake",):
+                        handel = road_pct.get(nm, 0) // 100
+                        out.append({
+                            "kafel": list(nb), "teren": nm, "praca": "droga",
+                            "daje": (f"+{handel} handlu" if handel
+                                     else "ruch i przejezdność dla karawan"),
+                            "tur_pracy": road_time.get(nm, 2), "dystans": d,
+                            "waga": 2 + 2 * handel,
+                        })
+            out.sort(key=lambda r: (-r["waga"] / max(1, r["tur_pracy"]),
+                                    r["dystans"]))
+            return out
+
+        lista = []
+        for u in bezczynni[:limit]:
+            dom = miasta.get(int(u.homecity or 0))
+            blisko = min(rows, key=lambda r: self.geom.real_distance(
+                (u.x, u.y), (int(r["x"]), int(r["y"]))))
+            prace = prace_wokol(u.x, u.y, 3)[:3]
+            lista.append({
+                "jednostka": u.type, "gdzie_stoi": [u.x, u.y],
+                "miasto_macierzyste": (str(dom.get("name")) if dom
+                                       else "(bez miasta)"),
+                "najblizsze_miasto": str(blisko.get("name")),
+                "dystans_do_niego": self.geom.real_distance(
+                    (u.x, u.y), (int(blisko["x"]), int(blisko["y"]))),
+                "kosztuje_tarcz": rs.units[u.type].uk_shield,
+                "proponowane_prace": prace or
+                    ["brak pracy w promieniu 3 — przenieś albo rozwiąż"],
+            })
+
+        # --- gdzie stoja bezczynni, miastami
+        wg_miast = collections.Counter()
+        for u in bezczynni:
+            blisko = min(rows, key=lambda r: self.geom.real_distance(
+                (u.x, u.y), (int(r["x"]), int(r["y"]))))
+            wg_miast[str(blisko.get("name"))] += 1
+
+        return {
+            "robotnikow_razem": len(robotnicy),
+            "wg_aktywnosci": dict(po_aktywnosci),
+            "bezczynnych": len(bezczynni),
+            "bezczynni_kosztuja_tarcz_na_ture": koszt_bezczynnych,
+            "strata_przez_20_tur": koszt_bezczynnych * 20,
+            "bezczynni_wg_miast": dict(wg_miast.most_common()),
+            "siec_drog": {
+                "miast_w_glownej_sieci": len(glowna),
+                "miast_razem": len(wezly),
+                "grupy": [sorted(g) for g in sieci],
+            },
+            "miasta_poza_siecia": odciete,
+            "bezczynni": lista,
+        }
+
     # ------------------------------------------------------------ zarzadca
 
     # Kolejnosc wyjsc w CMA jest ta sama, co w silniku (common/fc_types.h):
@@ -5750,6 +5966,10 @@ class IntelMixin:
         return self._need_intel().trade_routes(
             self._intel_ruleset(), int(args.get("limit") or 15), full,
             bool(args.get("tylko_miedzykontynentalne")))
+
+    def ai_workers(self, args: dict) -> dict:
+        return self._need_intel().worker_plan(
+            self._intel_ruleset(), int(args.get("limit") or 40))
 
     def ai_governor(self, args: dict) -> dict:
         return self._need_intel().governor_plan(

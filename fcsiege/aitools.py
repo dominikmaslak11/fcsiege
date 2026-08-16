@@ -606,6 +606,30 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "plan_robotnikow",
+        "description": (
+            "Gdzie stoją BEZCZYNNI robotnicy, ile cię kosztują i co mają "
+            "robić. Bezczynny robotnik nie jest neutralny — kosztuje tarczę "
+            "na turę, więc kilkunastu stojących to kilkanaście tarcz "
+            "wyrzucanych co turę. Podaje pozycję każdego, najbliższe miasto "
+            "i konkretne prace w promieniu 3 z czasem wykonania. Osobno "
+            "analizuje SIEĆ DRÓG: które miasta są połączone, które są poza "
+            "siecią i ile tur pracy kosztuje ich podłączenie — to istotne, "
+            "bo klasa Merchant nie jest natywna dla żadnego terenu i "
+            "karawana bez ciągłej drogi nie ruszy się z miejsca. Wywołaj, "
+            "gdy użytkownik pyta o robotników, bezczynne jednostki, budowę "
+            "dróg albo dlaczego karawana nie może dojechać."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "ilu bezczynnych wypisać, domyślnie 40"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "zarzadca",
         "description": (
             "Jaką nastawę zarządcy miasta (CMA) dać każdemu miastu i CO "
@@ -841,6 +865,7 @@ TOOL_METHOD = {
     "plan_karawan": "ai_caravans",
     "co_budowac": "ai_city_build",
     "zarzadca": "ai_governor",
+    "plan_robotnikow": "ai_workers",
     "epoki": "ai_eras",
     "moje_technologie": "ai_techs",
     "korupcja": "ai_corruption",
@@ -952,6 +977,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_city_build(dict(args))
     if name == "zarzadca":
         return bridge.ai_governor(dict(args))
+    if name == "plan_robotnikow":
+        return bridge.ai_workers(dict(args))
     if name == "epoki":
         return bridge.ai_eras(dict(args))
     if name == "moje_technologie":
