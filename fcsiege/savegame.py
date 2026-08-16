@@ -5036,6 +5036,12 @@ class Intel:
                         sum(v[0] for v in pk) + max(c[0], 1) - sz * 2,
                         sum(v[2] for v in pk) + c[2])
 
+            stolica = next(((int(q["x"]), int(q["y"])) for q in rows.values()
+                            if "Palace" in set(s._bits(q.get("improvements")))),
+                           None)
+            dystans = (self.geom.real_distance((x, y), stolica)
+                       if stolica else 0)
+
             ma_port = "Harbour" in blds or "Harbor" in blds
             teraz = obsada(size, ma_port)
             glodowe = teraz is None
@@ -5220,6 +5226,23 @@ class Intel:
                         zysk = baza * pct / 100.0
                         ocena += zysk
                         czemu.append(f"+{pct}% {out} od {baza:.0f} → +{zysk:.1f}/turę")
+                    # budynki tnace marnotrawstwo (ratusz) - ich wartosc to
+                    # NIE zadowolenie, tylko odzyskana produkcja; bez tego
+                    # ratusz w odleglym miescie wychodzil na grosze
+                    for out, ile in (("Trade", handel),
+                                     ("Shield", max(nadw, 0))):
+                        if ile <= 0:
+                            continue
+                        teraz_p = self._waste_pct(rs, out, blds, gov, techs,
+                                                  mine_blds, size, dystans)
+                        po_p = self._waste_pct(rs, out, blds | {bnm}, gov, techs,
+                                               mine_blds | {bnm}, size, dystans)
+                        if po_p < teraz_p:
+                            zysk = ile * (teraz_p - po_p) / 100.0
+                            ocena += zysk
+                            czemu.append(
+                                f"marnotrawstwo {out.lower()} {teraz_p}%→{po_p}%"
+                                f" → +{zysk:.1f}/turę")
                     niezadowoleni = max(0, size - self._unhappy_size(rs))
                     if content or content_potem:
                         ocena += min(content, niezadowoleni) * 2
@@ -5369,6 +5392,20 @@ class Intel:
         return {"ustroj": gov, "suwak_podatkow": tax,
                 "zaraza_od_rozmiaru": illness_min if illness_on else "wyłączona",
                 "miasta": wyniki}
+
+    def _waste_pct(self, rs, output: str, blds: set[str], gov: str,
+                   techs: set[str], mine: set[str], size: int,
+                   dystans: int) -> int:
+        """Ile procent danej produkcji miasto traci - jak city_waste()."""
+        baza = self._city_effect(rs, "Output_Waste", output, blds, gov,
+                                 techs, mine, size)
+        dyst = self._city_effect(rs, "Output_Waste_By_Distance", output, blds,
+                                 gov, techs, mine, size)
+        redukcja = self._city_effect(rs, "Output_Waste_Pct", output, blds, gov,
+                                     techs, mine, size)
+        poziom = baza + dyst * dystans // 100
+        poziom -= poziom * redukcja // 100
+        return max(0, min(100, poziom))
 
     def _unhappy_size(self, rs) -> int:
         """Od ktorego obywatela zaczyna sie niezadowolenie."""
