@@ -4651,7 +4651,10 @@ class Intel:
             }
 
         # --- plan: najlepsza trasa dla kazdego miasta, ktore ma jeszcze slot
+        # limit tras obowiazuje OBA miasta - bez pilnowania slotow partnera
+        # plan wysyla piec karawan do tego samego miasta, a przyjmie dwie
         plan, zajete = [], collections.Counter()
+        u_partnera = collections.Counter()
         for c in sorted(osiagalne,
                         key=lambda c: (-(c["handel_na_ture"] * 10
                                          + c["zloto_jednorazowo"])
@@ -4660,12 +4663,15 @@ class Intel:
             p = produkcja[nm]
             if max_routes and used[nm] + zajete[nm] >= max_routes:
                 continue
+            if max_routes and u_partnera[c["partner"]] >= max_routes:
+                continue
             if p["tur_na_karawane"] is None:
                 continue
             razem = p["tur_na_karawane"] + c["tur_marszu"]
             if razem > max_turns:
                 continue
             zajete[nm] += 1
+            u_partnera[c["partner"]] += 1
             plan.append({
                 "buduj_w": nm,
                 "tur_produkcji": p["tur_na_karawane"],
