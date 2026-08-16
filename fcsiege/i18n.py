@@ -595,6 +595,7 @@ TOOL_NAMES: dict[str, str] = {
     "szlaki_handlowe": "trade_routes",
     "plan_karawan": "caravan_plan",
     "co_budowac": "what_to_build",
+    "zarzadca": "governor",
     "co_da_rozwiazanie": "disbanding_yields",
     "audyt_miast": "city_audit",
     "przejezdnosc": "reachability",

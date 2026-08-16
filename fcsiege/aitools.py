@@ -606,6 +606,33 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "zarzadca",
+        "description": (
+            "Jaką nastawę zarządcy miasta (CMA) dać każdemu miastu i CO "
+            "naprawdę blokuje jego wzrost. Rozbija pytanie 'chcę metropolie "
+            "powyżej N' na trzy niezależne sufity: limit wielkości "
+            "(Size_Adj — bez akweduktu miasto kończy na 8 i żaden zarządca "
+            "tego nie obejdzie), żywność (jedyny sufit, który zarządca "
+            "podnosi) oraz szczęście (City_Unhappy_Size plus kara za "
+            "wielkość państwa, pokrywane budynkami, prawem wojennym "
+            "i luksusem). Podaje wagi CMA i minimalne nadwyżki do wpisania "
+            "w grze oraz podgląd, co miasto da przy nastawie na wzrost, "
+            "produkcję i handel. Wywołaj, gdy użytkownik pyta o zarządcę, "
+            "CMA, ustawienia miast, max food/production/luxury albo "
+            "dlaczego miasto nie rośnie."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "cel_rozmiar": {"type": "integer",
+                                "description": "docelowa wielkość metropolii, domyślnie 12"},
+                "miasto": {"type": "string",
+                           "description": "jedno miasto; pominięte = wszystkie"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "co_budowac",
         "description": (
             "Mówi, co KONKRETNE miasto powinno budować w tej turze: budynek, "
@@ -813,6 +840,7 @@ TOOL_METHOD = {
     "szlaki_handlowe": "ai_trade",
     "plan_karawan": "ai_caravans",
     "co_budowac": "ai_city_build",
+    "zarzadca": "ai_governor",
     "epoki": "ai_eras",
     "moje_technologie": "ai_techs",
     "korupcja": "ai_corruption",
@@ -922,6 +950,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_caravans(dict(args))
     if name == "co_budowac":
         return bridge.ai_city_build(dict(args))
+    if name == "zarzadca":
+        return bridge.ai_governor(dict(args))
     if name == "epoki":
         return bridge.ai_eras(dict(args))
     if name == "moje_technologie":

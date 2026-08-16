@@ -4382,6 +4382,277 @@ class Intel:
                 "promien_zasiegu": max_distance,
                 "fronty": sorted(rows, key=lambda r: -r["rozmiar"])}
 
+    # ------------------------------------------------------------ zarzadca
+
+    # Kolejnosc wyjsc w CMA jest ta sama, co w silniku (common/fc_types.h):
+    # O_FOOD, O_SHIELD, O_TRADE, O_GOLD, O_LUXURY, O_SCIENCE.
+    CMA_WYJSCIA = ("jedzenie", "tarcze", "handel", "zloto", "luksus", "nauka")
+
+    # Gotowe nastawy zarzadcy. Wagi sa wzgledne - liczy sie stosunek, nie
+    # wartosc bezwzgledna. `minimalna_nadwyzka` to twardy warunek: zarzadca
+    # odmowi ustawienia, ktore go lamie, wiec zbyt ostry prog wylacza CMA.
+    NASTAWY = {
+        "wzrost": {
+            "opis": "maksymalna żywność — miasto ma rosnąć",
+            "wagi": (10, 1, 1, 1, 1, 1), "min": (2, 0, 0, 0, 0, 0),
+            "happy": 1,
+        },
+        "produkcja": {
+            "opis": "maksymalne tarcze przy zerowym bilansie żywności",
+            "wagi": (1, 10, 1, 1, 1, 1), "min": (0, 0, 0, 0, 0, 0),
+            "happy": 1,
+        },
+        "handel": {
+            "opis": "maksymalny handel — nauka i złoto",
+            "wagi": (1, 1, 8, 1, 1, 1), "min": (0, 0, 0, 0, 0, 0),
+            "happy": 1,
+        },
+        "luksus": {
+            "opis": "luksus na zadowolenie — ratunek dla miasta w niepokojach",
+            "wagi": (1, 1, 1, 1, 8, 1), "min": (0, 0, 0, 0, 0, 0),
+            "happy": 5,
+        },
+        "zbalansowany": {
+            "opis": "rośnie i produkuje jednocześnie",
+            "wagi": (3, 2, 2, 1, 1, 1), "min": (1, 0, 0, 0, 0, 0),
+            "happy": 1,
+        },
+    }
+
+    def governor_plan(self, rs, cel_rozmiar: int = 12,
+                      miasto: str = "") -> dict:
+        """Jaka nastawe zarzadcy (CMA) dac kazdemu miastu i co ja blokuje.
+
+        Pytanie "chce duzo metropolii powyzej 12" rozbija sie na trzy
+        niezalezne sufity, a zarzadca rusza tylko jeden z nich:
+
+          1. LIMIT WIELKOSCI - `Size_Adj`. Bez akweduktu miasto konczy na 8
+             i zaden zarzadca tego nie obejdzie.
+          2. ZYWNOSC - czy w promieniu 2 w ogole jest tyle jedzenia. To
+             jedyny sufit, ktory zarzadca podnosi, przestawiajac obywateli
+             z tarcz na jedzenie.
+          3. SZCZESCIE - `City_Unhappy_Size` mowi, od ktorego obywatela
+             zaczyna sie niezadowolenie; do tego dochodzi kara za wielkosc
+             panstwa (`Empire_Size_Base`/`Step`). Pokrywa to zadowolenie
+             z budynkow, prawo wojenne i luksus.
+
+        Dlatego kazde miasto dostaje trzy sufity osobno i `waskie_gardlo`
+        mowi, ktory z nich wiaze pierwszy - bo tylko na ten warto wydawac.
+        """
+        import collections
+        import itertools
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        sec = s._sections[s.me.slot]
+        rows = {str(r.get("name")): r for r in (sec.table("c").dicts()
+                                                if sec.table("c") else [])}
+        if not rows:
+            return {"blad": "brak moich miast"}
+        if miasto and miasto not in rows:
+            return {"blad": f"nie mam miasta {miasto}",
+                    "dostepne": sorted(rows)}
+
+        tmap = TerrainMap(s)
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        mine_blds: set[str] = set()
+        for r in rows.values():
+            mine_blds |= set(s._bits(r.get("improvements")))
+        mine_incr, road_pct = _tile_bonuses(rs)
+        liczba_miast = len(rows)
+
+        def efekt(etype: str, blds: set[str], size: int = 0) -> int:
+            """Suma efektu przy warunkach spelnionych dla tego miasta."""
+            total = 0
+            for eff in rs.effects_by_type.get(etype, []):
+                ok = True
+                for q in eff.reqs:
+                    if q.type == "Gov":
+                        got = (q.name == gov)
+                    elif q.type == "Tech":
+                        got = q.name in techs
+                    elif q.type == "Building":
+                        pool = blds if q.range.lower() == "city" else mine_blds
+                        got = q.name in pool
+                    elif q.type == "MinSize":
+                        got = (size >= int(q.name)
+                               if str(q.name).isdigit() else False)
+                    else:
+                        got = q.present          # warunków spoza tej listy nie
+                    if got != q.present:         # rozstrzygamy - nie zgadujemy
+                        ok = False
+                        break
+                if ok:
+                    total += eff.value
+            return total
+
+        prog_nieszcz = self._unhappy_size(rs)
+        baza = efekt("Empire_Size_Base", set()) or 0
+        krok = efekt("Empire_Size_Step", set()) or baza or 0
+        # kara za rozrost panstwa: co `krok` miast powyzej `baza` to jeden
+        # dodatkowy niezadowolony w KAZDYM miescie
+        kara_imperium = 0
+        if baza and liczba_miast > baza:
+            kara_imperium = 1 + (liczba_miast - baza - 1) // max(1, krok)
+
+        wyniki = []
+        for nm in ([miasto] if miasto else list(rows)):
+            r = rows[nm]
+            x, y = int(r["x"]), int(r["y"])
+            size = int(r.get("size") or 0)
+            blds = set(s._bits(r.get("improvements")))
+            jedn = [u for u in s.units_of(s.me.slot)
+                    if str(u.homecity) == str(r.get("id"))]
+            wojsko_w_miescie = sum(
+                1 for u in jedn
+                if (u.x, u.y) == (x, y) and u.type in rs.units
+                and rs.units[u.type].is_military)
+
+            area = [((x + dx) % self.geom.xsize, (y + dy) % self.geom.ysize)
+                    for dx in range(-3, 4) for dy in range(-4, 5)
+                    if (dx, dy) != (0, 0)
+                    and self.geom.real_distance(
+                        (x, y), ((x + dx) % self.geom.xsize,
+                                 (y + dy) % self.geom.ysize)) <= 2]
+            port = "Harbour" in blds or "Harbor" in blds
+
+            def yld(a, b):
+                t = tmap.terrain(a, b)
+                terr = rs.terrains.get(t) if t else None
+                if terr is None:
+                    return None
+                f, sh, tr = terr.food, terr.shield, terr.trade
+                if tmap.has_extra("River", a, b):
+                    tr += 1
+                if tmap.has_extra("Road", a, b):
+                    tr += road_pct.get(t, 0) // 100
+                if tmap.has_extra("Irrigation", a, b):
+                    f += terr.irrigation_food_incr or 0
+                if tmap.has_extra("Mine", a, b):
+                    sh += mine_incr.get(t, 0)
+                if port and "Sea" in terr.flags:
+                    f += 1
+                return f, sh, tr
+
+            kafle = [v for v in (yld(a, b) for a, b in area) if v]
+            centrum = yld(x, y) or (0, 0, 0)
+
+            def najlepsza(sz: int, klucz):
+                """Najlepsza obsada `sz` kafli wg podanego klucza, przy jedzeniu >= 0."""
+                if sz > len(kafle):
+                    return None
+                best = None
+                for combo in itertools.combinations(kafle, sz):
+                    f = sum(v[0] for v in combo) + max(centrum[0], 1) - sz * 2
+                    if f < 0:
+                        continue
+                    sh = sum(v[1] for v in combo) + max(centrum[1], 1)
+                    tr = sum(v[2] for v in combo) + centrum[2]
+                    kv = klucz(f, sh, tr)
+                    if best is None or kv > best[0]:
+                        best = (kv, (f, sh, tr))
+                return best[1] if best else None
+
+            # --- sufit 1: limit wielkosci
+            cap, unlim = 0, False
+            for eff in rs.effects_by_type.get("Size_Adj", []):
+                need = [q for q in eff.reqs if q.type == "Building"]
+                if all((q.name in blds) == q.present for q in need):
+                    cap += eff.value
+            for eff in rs.effects_by_type.get("Size_Unlimit", []):
+                need = [q for q in eff.reqs if q.type == "Building"]
+                if need and all((q.name in blds) == q.present for q in need):
+                    unlim = True
+            sufit_limit = 999 if unlim else cap
+
+            # --- sufit 2: zywnosc
+            sufit_jedzenie = 0
+            for sz in range(1, min(len(kafle), 21) + 1):
+                if najlepsza(sz, lambda f, sh, tr: (f, sh, tr)) is not None:
+                    sufit_jedzenie = sz
+                else:
+                    break
+
+            # --- sufit 3: szczescie
+            content_bud = efekt("Make_Content", blds, size)
+            martial_each = efekt("Martial_Law_Each", blds, size)
+            martial_max = efekt("Martial_Law_Max", blds, size)
+            content_mil = min(wojsko_w_miescie * martial_each,
+                              martial_max * martial_each) if martial_each else 0
+            sufit_szczescie = 0
+            for sz in range(1, 41):
+                niezadowoleni = max(0, sz - prog_nieszcz) + kara_imperium
+                # luksus: dwa punkty luksusu robia jednego zadowolonego
+                lux = najlepsza(sz, lambda f, sh, tr: (tr, f, sh))
+                z_luksusu = (lux[2] // 2 // 2) if lux else 0
+                if content_bud + content_mil + z_luksusu >= niezadowoleni:
+                    sufit_szczescie = sz
+                else:
+                    break
+
+            realny = min(sufit_limit, sufit_jedzenie, sufit_szczescie)
+            waskie = min(
+                (("limit wielkości", sufit_limit),
+                 ("żywność", sufit_jedzenie),
+                 ("szczęście", sufit_szczescie)), key=lambda e: e[1])[0]
+
+            # --- jaka nastawe dac
+            if realny <= size and waskie != "żywność":
+                nastawa = "produkcja" if sufit_szczescie > size else "luksus"
+            elif sufit_jedzenie > size and realny > size:
+                nastawa = "wzrost"
+            else:
+                nastawa = "zbalansowany"
+            if nastawa == "wzrost" and size >= cel_rozmiar:
+                nastawa = "zbalansowany"
+
+            n = self.NASTAWY[nastawa]
+            podglad = {}
+            for kl, klucz in (("wzrost", lambda f, sh, tr: (f, sh, tr)),
+                              ("produkcja", lambda f, sh, tr: (sh, f, tr)),
+                              ("handel", lambda f, sh, tr: (tr, f, sh))):
+                v = najlepsza(size, klucz)
+                podglad[kl] = ({"jedzenie": v[0], "tarcze": v[1], "handel": v[2]}
+                               if v else "miasto się nie wyżywi")
+
+            wyniki.append({
+                "miasto": nm, "rozmiar": size,
+                "zarzadca_wlaczony": str(r.get("cma_enabled")).lower() == "true",
+                "sufit_limit_wielkosci": sufit_limit,
+                "sufit_zywnosci": sufit_jedzenie,
+                "sufit_szczescia": sufit_szczescie,
+                "realny_sufit": realny,
+                "waskie_gardlo": waskie,
+                "dojdzie_do_celu": realny >= cel_rozmiar,
+                "niezadowolonych_teraz": max(0, size - prog_nieszcz) + kara_imperium,
+                "zadowolenie_z_budynkow": content_bud,
+                "zadowolenie_z_prawa_wojennego": content_mil,
+                "zalecana_nastawa": nastawa,
+                "co_daje": n["opis"],
+                "wagi_cma": dict(zip(self.CMA_WYJSCIA, n["wagi"])),
+                "minimalna_nadwyzka_cma": dict(zip(self.CMA_WYJSCIA, n["min"])),
+                "wspolczynnik_szczescia": n["happy"],
+                "podglad_obsady": podglad,
+            })
+
+        wyniki.sort(key=lambda w: (-w["realny_sufit"], -w["rozmiar"]))
+        blokady = collections.Counter(w["waskie_gardlo"] for w in wyniki)
+        return {
+            "cel_rozmiar": cel_rozmiar,
+            "ustroj": gov, "miast": liczba_miast,
+            "prog_niezadowolenia": prog_nieszcz,
+            "kara_za_wielkosc_panstwa": kara_imperium,
+            "empire_size_base": baza, "empire_size_step": krok,
+            "miast_dojdzie_do_celu": sum(1 for w in wyniki
+                                         if w["dojdzie_do_celu"]),
+            "co_blokuje_ile_miast": dict(blokady),
+            "kolejnosc_wyjsc_cma": list(self.CMA_WYJSCIA),
+            "dostepne_nastawy": {k: v["opis"] for k, v in self.NASTAWY.items()},
+            "miasta": wyniki,
+        }
+
     # -------------------------------------------------- co budowac w miescie
 
     def city_build_advice(self, rs, miasto: str = "", limit: int = 8) -> dict:
@@ -5479,6 +5750,11 @@ class IntelMixin:
         return self._need_intel().trade_routes(
             self._intel_ruleset(), int(args.get("limit") or 15), full,
             bool(args.get("tylko_miedzykontynentalne")))
+
+    def ai_governor(self, args: dict) -> dict:
+        return self._need_intel().governor_plan(
+            self._intel_ruleset(), int(args.get("cel_rozmiar") or 12),
+            str(args.get("miasto") or ""))
 
     def ai_city_build(self, args: dict) -> dict:
         return self._need_intel().city_build_advice(
