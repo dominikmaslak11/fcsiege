@@ -4682,14 +4682,31 @@ class Intel:
                             out = [q.name for q in eff.reqs
                                    if q.type == "OutputType"]
                             proc.append((out[0] if out else "?", eff.value))
-                    content = 0
+                    content, content_potem = 0, 0
                     for eff in rs.effects_by_type.get("Make_Content", []):
                         # efekt nalezy do budynku tylko wtedy, gdy to JEGO
                         # obecnosc jest wymogiem, a nie gdy inny budynek go
                         # sprawdza (Mausoleum vs City Walls)
                         wlasne = [q for q in eff.reqs if q.type == "Building"]
-                        if len(wlasne) == 1 and wlasne[0].name == bnm \
-                                and wlasne[0].present:
+                        if not (len(wlasne) == 1 and wlasne[0].name == bnm
+                                and wlasne[0].present):
+                            continue
+                        # ...i tylko wtedy, gdy POZOSTALE warunki tez sa
+                        # spelnione: drugi punkt Swiatyni wisi na Mysticism,
+                        # ktorego moge nie miec
+                        brak_t = [q.name for q in eff.reqs if q.type == "Tech"
+                                  and (q.name in techs) != q.present]
+                        zly_gov = any(q.type == "Gov" and (q.name == gov) != q.present
+                                      for q in eff.reqs)
+                        zly_rozm = any(
+                            q.type == "MinSize" and str(q.name).isdigit()
+                            and (size >= int(q.name)) != q.present
+                            for q in eff.reqs)
+                        if zly_gov or zly_rozm:
+                            continue
+                        if brak_t:
+                            content_potem += eff.value
+                        else:
                             content += eff.value
                     for out, pct in proc:
                         baza = handel * (tax / 100.0) if out.lower() == "gold" \
@@ -4698,10 +4715,13 @@ class Intel:
                         ocena += zysk
                         czemu.append(f"+{pct}% {out} od {baza:.0f} → +{zysk:.1f}/turę")
                     niezadowoleni = max(0, size - self._unhappy_size(rs))
-                    if content:
+                    if content or content_potem:
                         ocena += min(content, niezadowoleni) * 2
-                        czemu.append(f"Make_Content +{content}, "
-                                     f"niezadowolonych {niezadowoleni}")
+                        czemu.append(f"Make_Content +{content} teraz"
+                                     + (f" (+{content_potem} po zdobyciu "
+                                        "brakujących technologii)"
+                                        if content_potem else "")
+                                     + f", niezadowolonych {niezadowoleni}")
                         if not niezadowoleni:
                             ostrz = "w tym mieście nie ma jeszcze niezadowolonych"
                     if bl.is_wonder:
