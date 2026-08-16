@@ -583,6 +583,36 @@ def reach_within(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
     return {tile: t for tile, (t, _u) in best.items()}
 
 
+def _resource_yields(rs) -> dict[str, tuple[int, int, int]]:
+    """Ile daje zasob specjalny na kaflu: (jedzenie, tarcze, handel).
+
+    Zasoby siedza w sekcjach `[resource_*]`, ktore wskazuja swoje ulepszenie
+    polem `extra` - i to pod nazwa tego ulepszenia zapis trzyma je na mapie.
+    Bez tego Zloto na gorach wygladalo na 0/3/0 zamiast 0/3/6, a wiec kazde
+    miasto z zasobem mialo zanizony handel albo tarcze.
+    """
+    cached = getattr(rs, "_resource_cache", None)
+    if cached is not None:
+        return cached
+    import os
+
+    from .registry import parse_file
+    out: dict[str, tuple[int, int, int]] = {}
+    path = os.path.join(rs.path, "terrain.ruleset")
+    if os.path.exists(path):
+        reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+        for sec in reg.prefixed("resource_"):
+            extra = clean_name(sec.str("extra"))
+            if extra:
+                out[extra] = (sec.int("food"), sec.int("shield"),
+                              sec.int("trade"))
+    try:
+        rs._resource_cache = out
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _tile_bonuses(rs) -> tuple[dict, dict]:
     """Ile daje irygacja i kopalnia na danym terenie oraz kopalnia w tarczach."""
     cached = getattr(rs, "_tile_bonus_cache", None)
@@ -644,6 +674,7 @@ def _city_trade(rs, tmap: "TerrainMap", geom: "MapGeometry",
     handlu, a nie handel faktyczny.
     """
     mine, road_pct = _tile_bonuses(rs)
+    zasoby = _resource_yields(rs)
 
     def yields(a: int, b: int) -> tuple[int, int, int] | None:
         name = tmap.terrain(a, b)
@@ -651,6 +682,10 @@ def _city_trade(rs, tmap: "TerrainMap", geom: "MapGeometry",
         if terr is None:
             return None
         f, sh, tr = terr.food, terr.shield, terr.trade
+        for zn, (zf, zs, zt) in zasoby.items():
+            if (zf or zs or zt) and tmap.has_extra(zn, a, b):
+                f += zf; sh += zs; tr += zt
+                break
         if tmap.has_extra("River", a, b):
             tr += 1
         if tmap.has_extra("Road", a, b):
@@ -4766,6 +4801,7 @@ class Intel:
         for r in rows.values():
             mine_blds |= set(s._bits(r.get("improvements")))
         mine_incr, road_pct = _tile_bonuses(rs)
+        zasoby = _resource_yields(rs)
         liczba_miast = len(rows)
 
         def efekt(etype: str, blds: set[str], size: int = 0) -> int:
@@ -4829,6 +4865,10 @@ class Intel:
                 if terr is None:
                     return None
                 f, sh, tr = terr.food, terr.shield, terr.trade
+                for zn, (zf, zs, zt) in zasoby.items():
+                    if (zf or zs or zt) and tmap.has_extra(zn, a, b):
+                        f += zf; sh += zs; tr += zt
+                        break
                 if tmap.has_extra("River", a, b):
                     tr += 1
                 if tmap.has_extra("Road", a, b):
@@ -5014,6 +5054,7 @@ class Intel:
         for r in rows.values():
             mine_blds |= set(s._bits(r.get("improvements")))
         mine_incr, road_pct = _tile_bonuses(rs)
+        zasoby = _resource_yields(rs)
 
         # ustawienia partii, ktore zmieniaja werdykty
         st = s.reg.get("settings")
@@ -5086,6 +5127,10 @@ class Intel:
                 if terr is None:
                     return None
                 f, sh, tr = terr.food, terr.shield, terr.trade
+                for zn, (zf, zs, zt) in zasoby.items():
+                    if (zf or zs or zt) and tmap.has_extra(zn, a, b):
+                        f += zf; sh += zs; tr += zt
+                        break
                 if tmap.has_extra("River", a, b):
                     tr += 1
                 if tmap.has_extra("Road", a, b):
@@ -5407,6 +5452,41 @@ class Intel:
                       "; ".join(czemu) or "brak wyraźnego zysku",
                       "cud" if bl.is_wonder else "budynek", ostrz)
 
+            # ---------------- Coinage: zamiana tarcz na zloto
+            # Budynek rodzaju "Convert" nie powstaje - miasto po prostu
+            # przelicza nadwyzke tarcz na zloto. To jedyna sensowna odpowiedz
+            # dla miasta, ktore uderzylo w swoj sufit i nie ma czego budowac:
+            # dwie tarcze na ture zamienione w dwa zlote biją kazdy budynek,
+            # ktory bedzie stal dwadziescia tur i doda kolejna zlotowke
+            # utrzymania.
+            zamiana = next((b for b in rs.buildings.values()
+                            if getattr(b, "genus", "") == "Convert"
+                            and "Gold" in getattr(b, "flags", ())), None)
+            if zamiana is None:
+                zamiana = rs.buildings.get("Coinage")
+            if zamiana is not None and nadw > 0:
+                # ile inne opcje realnie dają — jeśli nic nie przebija zamiany,
+                # to znaczy, że miasto nie ma po co produkować tarcz
+                # Zamiana nie konkuruje wartoscia z budynkiem - ona jest
+                # tym, co robisz, gdy zadnego sensownego budynku nie ma.
+                # Dlatego jej ocena zalezy od TEGO, ile warte sa alternatywy,
+                # a nie od wielkosci produkcji: inaczej wygrywalaby w
+                # najlepszym miescie, co jest odwrotnoscia prawdy.
+                najlepsze = max((o["ocena"] for o in opcje), default=0.0)
+                ocena = (nadw * 0.5) if najlepsze < 1.0 else 0.4
+                czemu = [f"{nadw} tarcz/turę → {nadw} złota/turę, bez końca",
+                         "nie kosztuje utrzymania i nigdy się nie kończy"]
+                ostrz = None
+                if najlepsze >= 1.0:
+                    ostrz = ("miasto ma jeszcze co budować — zamiana na złoto "
+                             "dopiero, gdy zabraknie sensownych celów")
+                opcje.append({
+                    "co": zamiana.name, "rodzaj": "zamiana",
+                    "koszt_tarcz": 0, "utrzymanie_zl": 0, "tur": None,
+                    "ocena": round(ocena, 2), "dlaczego": "; ".join(czemu),
+                    **({"ostrzezenie": ostrz} if ostrz else {}),
+                })
+
             # ---------------- karawana na cud
             if merch is not None and cudowe:
                 cele = []
@@ -5472,6 +5552,15 @@ class Intel:
                       ("zmiana z budynku na jednostkę kosztuje 50% zapasu"
                        if kind_now == "Building" and zapas else None))
 
+            # Ocena mowi, ILE cos daje; nie mowila dotad, KIEDY. Cud wart 6.0
+            # w miescie, ktore budowaloby go sto tur, jest wart tyle, co nic -
+            # dlatego dzielimy ocene przez czas, gdy ten przekracza rozsadek.
+            for o in opcje:
+                tt = o.get("tur")
+                if tt and tt > 25:
+                    o["ocena"] = round(o["ocena"] * 25.0 / tt, 2)
+                    o["dlaczego"] = (f"stałoby {tt} tur — "
+                                     + o["dlaczego"])
             opcje.sort(key=lambda o: (-o["ocena"], o["tur"] or 999))
             wyniki.append({
                 "miasto": nm, "rozmiar": size,
