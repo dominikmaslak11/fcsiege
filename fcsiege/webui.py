@@ -28,6 +28,24 @@ TEXTS = {
         "r_cities": "Miasta",
         "r_army": "Moje wojska",
         "r_trade": "Szlaki handlowe",
+        "r_workers": "Robotnicy",
+        "r_build": "Co budować",
+        "r_gov": "Zarządca miast",
+        "w_idle": "bezczynnych",
+        "w_cost": "kosztują tarcz/turę",
+        "w_loss20": "strata przez 20 tur",
+        "w_where": "Gdzie stoją i co mają robić",
+        "w_pos": "pozycja",
+        "w_near": "przy mieście",
+        "w_job": "praca",
+        "w_gain": "daje",
+        "w_turns": "tur",
+        "w_dist": "kafli",
+        "w_net": "Sieć dróg",
+        "w_connected": "miast połączonych",
+        "w_outside": "Poza siecią",
+        "w_towork": "tur pracy do sieci",
+        "w_none": "Wszyscy robotnicy pracują.",
         "compute": "Policz",
         "ruleset": "Zestaw reguł",
         "city_terrain": "Teren miasta",
@@ -84,6 +102,24 @@ TEXTS = {
         "r_cities": "Cities",
         "r_army": "My forces",
         "r_trade": "Trade routes",
+        "r_workers": "Workers",
+        "r_build": "What to build",
+        "r_gov": "City governor",
+        "w_idle": "idle",
+        "w_cost": "costing shields/turn",
+        "w_loss20": "lost over 20 turns",
+        "w_where": "Where they stand and what to do",
+        "w_pos": "position",
+        "w_near": "near city",
+        "w_job": "job",
+        "w_gain": "gives",
+        "w_turns": "turns",
+        "w_dist": "tiles",
+        "w_net": "Road network",
+        "w_connected": "cities connected",
+        "w_outside": "Outside the network",
+        "w_towork": "worker-turns to connect",
+        "w_none": "Every worker is busy.",
         "compute": "Compute",
         "ruleset": "Ruleset",
         "city_terrain": "City terrain",
@@ -338,6 +374,9 @@ dialog::backdrop {{ background:rgba(0,0,0,.6); }}
         <button class="btn ghost" data-tool="audyt_miast">{t[r_cities]}</button>
         <button class="btn ghost" data-tool="moje_wojska">{t[r_army]}</button>
         <button class="btn ghost" data-tool="szlaki_handlowe">{t[r_trade]}</button>
+        <button class="btn ghost" data-tool="plan_robotnikow">{t[r_workers]}</button>
+        <button class="btn ghost" data-tool="co_budowac">{t[r_build]}</button>
+        <button class="btn ghost" data-tool="zarzadca">{t[r_gov]}</button>
       </div>
     </div>
     <div class="card" id="alertcard" hidden>
@@ -606,7 +645,62 @@ function renderTable(rows) {{
   return wrap;
 }}
 
-function renderResult(data) {{
+/* Robotnicy maja wlasny widok, bo to raport ogladany co ture: liczba
+   bezczynnych i ich koszt musza byc widoczne od razu, a nie schowane
+   w JSON-ie pod tabela. */
+function renderWorkers(d) {{
+  const box = el("div");
+  const head = el("div", "stats");
+  const stat = (v, label) => {{
+    const c = el("div", "stat");
+    c.append(el("b", null, String(v)), el("span", null, label));
+    return c;
+  }};
+  head.append(stat(d.bezczynnych ?? d.idle ?? 0, "{t[w_idle]}"));
+  head.append(stat(d.bezczynni_kosztuja_tarcz_na_ture ?? 0, "{t[w_cost]}"));
+  head.append(stat(d.strata_przez_20_tur ?? 0, "{t[w_loss20]}"));
+  const net = d.siec_drog || {{}};
+  head.append(stat((net.miast_w_glownej_sieci ?? 0) + "/" + (net.miast_razem ?? 0),
+                   "{t[w_connected]}"));
+  box.append(head);
+
+  const lista = d.bezczynni || [];
+  if (!lista.length) {{
+    box.append(el("p", "hint", "{t[w_none]}"));
+  }} else {{
+    box.append(el("h3", null, "{t[w_where]}"));
+    const rows = lista.map((u) => {{
+      const p = (u.proponowane_prace || [])[0];
+      const job = (p && typeof p === "object") ? p : null;
+      return {{
+        "{t[w_pos]}": (u.gdzie_stoi || []).join(", "),
+        "{t[w_near]}": u.najblizsze_miasto || "",
+        "{t[w_job]}": job ? (job.praca + " — " + job.teren) : String(p || ""),
+        "{t[w_gain]}": job ? job.daje : "",
+        "{t[w_turns]}": job ? job.tur_pracy : "",
+        "{t[w_dist]}": job ? job.dystans : "",
+      }};
+    }});
+    box.append(renderTable(rows));
+  }}
+
+  const poza = d.miasta_poza_siecia || [];
+  if (poza.length) {{
+    box.append(el("h3", null, "{t[w_outside]}"));
+    box.append(renderTable(poza.map((r) => ({{
+      "{t[w_near]}": r.miasto,
+      "{t[w_towork]}": r.tur_pracy_do_sieci === null ? "—" : r.tur_pracy_do_sieci,
+      "{t[w_net]}": r.najblizsze_w_sieci || "—",
+      "": r.uwaga || "",
+    }}))));
+  }}
+  return box;
+}}
+
+function renderResult(data, tool) {{
+  if (tool === "plan_robotnikow" && data && data.bezczynni !== undefined) {{
+    return renderWorkers(data);
+  }}
   const box = el("div");
   // najdluzsza lista slownikow to zwykle sedno raportu - pokaz ja tabela
   let best = null;
@@ -637,7 +731,7 @@ document.querySelectorAll("[data-tool]").forEach((b) => {{
     try {{
       const d = await call(b.dataset.tool, {{}});
       $("#report").textContent = "";
-      $("#report").append(renderResult(d));
+      $("#report").append(renderResult(d, b.dataset.tool));
     }} catch (e) {{
       $("#report").textContent = String(e.message);
     }}
