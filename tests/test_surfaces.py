@@ -437,6 +437,25 @@ def test_savegame():
               all(o.get("powod") for c in bud["miasta"]
                   for o in c["nie_da_sie_zbudowac"]))
 
+    # kafel jest natywny takze przez ulepszenie z flaga NativeTile - rzeka
+    # czyni kafel natywnym dla klasy handlowej, a flagi JumpFrom/JumpTo
+    # pozwalaja przejsc z drogi na rzeke. Bez tego karawana wyglada na
+    # uwiezniona po jednej stronie kazdej rzeki.
+    from fcsiege.savegame import _native_extras
+    nat = _native_extras(bridge._need_intel()._intel_ruleset()
+                         if hasattr(bridge, "_need_intel") else None) \
+        if False else _native_extras(bridge._intel_ruleset())
+    rzeka = nat.get("River")
+    if rzeka is not None:
+        check("rzeka czyni kafel natywnym dla klasy handlowej",
+              bool(rzeka["native_to"]), str(sorted(rzeka["native_to"])))
+        droga = nat.get("Road") or {}
+        check("droga i rzeka mają flagi skoku, więc da się między nimi przejść",
+              (rzeka.get("jump_to") and droga.get("jump_from"))
+              or (rzeka.get("jump_from") and droga.get("jump_to")),
+              f"rzeka jump_from={rzeka.get('jump_from')} jump_to={rzeka.get('jump_to')}, "
+              f"droga jump_from={droga.get('jump_from')} jump_to={droga.get('jump_to')}")
+
     kar = dispatch(bridge, "plan_karawan", {"limit": 6})
     if "blad" in kar:
         check("plan karawan zgłasza brak danych zrozumiale",

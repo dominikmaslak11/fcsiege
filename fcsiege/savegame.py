@@ -415,7 +415,19 @@ def _enter_cost_fn(rs, tmap: TerrainMap, ut, full: int, blocked=None,
     single = max(1, rs.move_fragments)
     uclass = rs.uclass_of(ut)
     road_cost = _road_move_costs(rs)
+    nat_extras = _native_extras(rs)
     cities = cities or set()
+
+    def natywny_kafel(tile: tuple[int, int]) -> bool:
+        """Jak is_native_tile_to_class(): teren ALBO ulepszenie z NativeTile."""
+        name = tmap.terrain(*tile)
+        terr = rs.terrains.get(name) if name else None
+        if terr is not None and uclass.name in terr.native_to:
+            return True
+        for extra, opis in nat_extras.items():
+            if uclass.name in opis["native_to"] and tmap.has_extra(extra, *tile):
+                return True
+        return False
 
     def native_near(tile: tuple[int, int]) -> bool:
         if geom is None:
@@ -438,8 +450,37 @@ def _enter_cost_fn(rs, tmap: TerrainMap, ut, full: int, blocked=None,
         for extra, c in road_cost.items():
             if tmap.has_extra(extra, *frm) and tmap.has_extra(extra, *to):
                 best = c if best is None else min(best, c)
+
         if best is None and uclass.name not in terr.native_to:
-            if not (to in cities and native_near(to)):
+            # teren nie jest natywny - ale kafel moze byc natywny przez
+            # ulepszenie (rzeka, droga), a przejscie miedzy dwoma roznymi
+            # typami drog dopuszczaja flagi JumpFrom/JumpTo (is_native_move)
+            wolno = False
+            if natywny_kafel(to):
+                if not natywny_kafel(frm):
+                    wolno = True           # zejscie z transportu / z miasta
+                else:
+                    for extra, opis in nat_extras.items():
+                        if not (uclass.name in opis["native_to"]
+                                and tmap.has_extra(extra, *to)):
+                            continue
+                        if not opis["droga"]:
+                            wolno = True   # ulepszenie niedrogowe wystarcza
+                            break
+                        if not opis["jump_to"]:
+                            continue
+                        for inne, o2 in nat_extras.items():
+                            if (inne != extra and o2["droga"]
+                                    and o2["jump_from"]
+                                    and uclass.name in o2["native_to"]
+                                    and tmap.has_extra(inne, *frm)):
+                                wolno = True
+                                break
+                        if wolno:
+                            break
+            if not wolno and to in cities and native_near(to):
+                wolno = True               # miasto jako bezpieczna przystan
+            if not wolno:
                 return None                # klasa tu nie wejdzie
             best = max(1, terr.movement_cost) * single
         if best is None:
@@ -635,6 +676,54 @@ def _city_trade(rs, tmap: "TerrainMap", geom: "MapGeometry",
     vals.sort(key=lambda v: (-v[0], -v[1], -v[2]))
     centre = yields(x, y) or (0, 0, 0)
     return sum(v[2] for v in vals[:max(0, size)]) + centre[2]
+
+
+def _native_extras(rs) -> dict[str, dict]:
+    """Ulepszenia, ktore SAME czynia kafel natywnym dla klasy jednostki.
+
+    W silniku (`is_native_tile_to_class`) kafel jest natywny, gdy natywny
+    jest jego TEREN albo gdy lezy na nim ulepszenie z flaga `NativeTile`,
+    natywne dla tej klasy. Klasa Merchant nie jest natywna dla zadnego
+    terenu - jest natywna wylacznie dla Drogi, Kolei, Maglevu i RZEKI,
+    i to wlasnie one pozwalaja karawanie w ogole gdziekolwiek stanac.
+
+    Zbieramy tez flagi `JumpFrom`/`JumpTo` typow drog, bo to one decyduja,
+    czy jednostka moze przejsc Z drogi NA rzeke i odwrotnie
+    (`is_native_move`). Bez tego karawana wyglada na uwieziona po jednej
+    stronie kazdej rzeki.
+    """
+    cached = getattr(rs, "_native_extra_cache", None)
+    if cached is not None:
+        return cached
+    import os
+
+    from .registry import parse_file
+    out: dict[str, dict] = {}
+    path = os.path.join(rs.path, "terrain.ruleset")
+    if os.path.exists(path):
+        reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+        for sec in reg.prefixed("extra_"):
+            nm = clean_name(sec.str("rule_name") or sec.str("name"))
+            flags = {str(f) for f in sec.list("flags")}
+            if not nm or "NativeTile" not in flags:
+                continue
+            out[nm] = {
+                "native_to": {clean_name(str(c)) for c in sec.list("native_to")},
+                "droga": "Road" in {str(c) for c in sec.list("causes")},
+                "jump_from": False, "jump_to": False,
+            }
+        # flagi skoku siedza przy TYPIE drogi, nie przy ulepszeniu
+        for sec in reg.prefixed("road_"):
+            extra = clean_name(sec.str("extra")) or clean_name(sec.str("name"))
+            if extra in out:
+                flags = {str(f) for f in sec.list("flags")}
+                out[extra]["jump_from"] = "JumpFrom" in flags
+                out[extra]["jump_to"] = "JumpTo" in flags
+    try:
+        rs._native_extra_cache = out
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def _road_move_costs(rs) -> dict[str, int]:
