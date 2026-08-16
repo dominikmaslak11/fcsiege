@@ -1087,6 +1087,54 @@ class Intel:
             wolne = base + sum(1 for m in steps if size >= m)
             deficyt = max(0, jedzacy.get(int(r.get("id") or 0), 0) - wolne)
 
+            # Ktory wariant akweduktu miasto w ogole moze postawic. Tanie
+            # warianty maja wymog Extra/Terrain o zasiegu "Adjacent", a na
+            # mapie hex sasiadow jest SZESC, nie osiem - liczenie kwadratem
+            # 3x3 dopisuje kafle, ktore sasiadami nie sa, i obiecuje budynek,
+            # ktorego gra nie pozwoli zbudowac.
+            sasiedzi = list(self.geom.neighbours(x, y))
+            ma_rzeke = tmap.has_extra("River", x, y) or any(
+                tmap.has_extra("River", a, b) for a, b in sasiedzi)
+            ma_jezioro = any(tmap.terrain(a, b) == "Lake" for a, b in sasiedzi)
+            akwedukt = None
+            for nazwa in ("Aqueduct, Lake", "Aqueduct, River", "Aqueduct"):
+                bl = rs.buildings.get(nazwa)
+                if bl is None or nazwa in blds:
+                    continue
+                wymogi = [(q.type, q.name, q.present) for q in bl.reqs]
+                ok = True
+                for typ, nm, obecny in wymogi:
+                    if typ == "Extra" and nm == "River":
+                        ok = ok and (ma_rzeke == obecny)
+                    elif typ == "Terrain" and nm == "Lake":
+                        ok = ok and (ma_jezioro == obecny)
+                    elif typ == "Tech":
+                        ok = ok and ((nm in techs) == obecny)
+                if ok:
+                    akwedukt = {
+                        "budynek": nazwa, "koszt_tarcz": bl.build_cost,
+                        "utrzymanie_zl": bl.upkeep,
+                        "wymaga_technologii": [q.name for q in bl.reqs
+                                               if q.type == "Tech"
+                                               and q.name not in techs],
+                    }
+                    break
+            brakuje_akweduktu = None
+            if akwedukt is None and not any(
+                    n in blds for n in ("Aqueduct", "Aqueduct, River",
+                                        "Aqueduct, Lake")):
+                brak_t = sorted({q.name for n in ("Aqueduct",)
+                                 for q in (rs.buildings[n].reqs
+                                           if n in rs.buildings else [])
+                                 if q.type == "Tech" and q.name not in techs})
+                brakuje_akweduktu = {
+                    "rzeka_obok": ma_rzeke, "jezioro_obok": ma_jezioro,
+                    "brakuje_technologii": brak_t,
+                    "powod": ("brak rzeki i jeziora obok — tanie warianty "
+                              "za 20 tarcz odpadają" if not (ma_rzeke or ma_jezioro)
+                              else "brakuje technologii"),
+                }
+
             # miasto obrabia obszar o promieniu 2 (city_radius_sq), a nie samo
             # sasiedztwo, i obsadza tyle kafli, ilu ma obywateli
             obszar = []
@@ -1212,6 +1260,8 @@ class Intel:
                 "miasto": str(r.get("name")), "x": x, "y": y, "rozmiar": size,
                 "teren_miasta": tmap.terrain(x, y),
                 "limit_wielkosci": "bez limitu" if unlim else cap,
+                "akwedukt_do_zbudowania": akwedukt,
+                "akweduktu_nie_da_sie_zbudowac": brakuje_akweduktu,
                 "deficyt_utrzymania": deficyt,
                 "kafli_w_zasiegu": len(kafle),
                 "zywnosc_z_obrabianych_kafli": zywnosc_teraz,
