@@ -405,6 +405,27 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "ocena_zagrozenia",
+        "description": (
+            "Kto realnie zagraża, a kto tylko wygląda groźnie na liście nacji. "
+            "Sama liczba jednostek nie mówi nic — wojsko po drugiej stronie "
+            "mapy, bez połączenia lądowego i bez transportu, nie zajmie "
+            "żadnego miasta. Narzędzie liczy zdolność UŻYCIA siły: realny marsz "
+            "po heksie do najbliższego Twojego miasta, istnienie wspólnego "
+            "lądu, posiadanie statków z ładownością. Osobno ocenia łatwość "
+            "uderzenia w drugą stronę — teren ich miast, mury, ich złoto — bo "
+            "to są dwie różne rzeczy."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tury": {"type": "integer",
+                         "description": "horyzont marszu, domyślnie 8"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "plan_produkcji",
         "description": (
             "Co budować w każdym mieście, względem strategii I sytuacji "
@@ -740,6 +761,7 @@ TOOL_METHOD = {
     "plan_tury": "ai_turn_plan",
     "plan_badan": "ai_research_plan",
     "plan_produkcji": "ai_production_plan",
+    "ocena_zagrozenia": "ai_threats",
     "mobilnosc": "ai_mobility",
     "obrona_miasta": "ai_city_defense",
     "alerty": "ai_alerts",
@@ -853,6 +875,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_research_plan(dict(args))
     if name == "plan_produkcji":
         return bridge.ai_production_plan(dict(args))
+    if name == "ocena_zagrozenia":
+        return bridge.ai_threats(dict(args))
     if name == "mobilnosc":
         return bridge.ai_mobility(dict(args))
     if name == "obrona_miasta":

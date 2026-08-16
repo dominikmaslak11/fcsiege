@@ -106,6 +106,7 @@ class UnitType:
     uk_food: int = 0
     uk_happy: int = 0        # ilu niezadowolonych robi jednostka w polu
     uk_gold: int = 0
+    transport_cap: int = 0   # ile jednostek uniesie; >0 znaczy desant
     flags: set[str] = field(default_factory=set)
     roles: set[str] = field(default_factory=set)
     reqs: list[Req] = field(default_factory=list)
@@ -339,6 +340,7 @@ class Ruleset:
                 uk_food=sec.int("uk_food"),
                 uk_happy=sec.int("uk_happy"),
                 uk_gold=sec.int("uk_gold"),
+                transport_cap=sec.int("transport_cap"),
                 flags=set(str(f) for f in sec.list("flags")),
                 roles=set(str(f) for f in sec.list("roles")),
                 reqs=self._reqs_from(sec),

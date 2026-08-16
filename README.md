@@ -583,6 +583,24 @@ dróg**, dystans do stolicy i otoczenie. Miasto bez dróg i portu jest
 obciążeniem, nie nabytkiem — kosztuje utrzymanie, garnizon i szczęście, a nie
 daje produkcji.
 
+### Ocena zagrożenia i kolejność podboju
+
+`ocena_zagrozenia` rozdziela dwie rzeczy, które lista nacji miesza: **kto może
+Cię uderzyć** i **kogo opłaca się uderzyć**. Sama liczba jednostek nie mówi
+nic — wojsko po drugiej stronie mapy, bez połączenia lądowego i bez transportu,
+nie zajmie żadnego miasta.
+
+Zdolność uderzenia liczymy z **realnego marszu po heksie** do najbliższego
+Twojego miasta, z istnienia wspólnego lądu i z posiadania statków **z ładownością**
+(sam okręt bez `transport_cap` nikogo nie przewiezie). Wynik mnożymy przez stan
+dyplomatyczny: wojna ×2, zawieszenie broni ×1,5.
+
+Osobno liczymy **kolejność podboju** — bliskość, łatwość terenu, mury i wartość
+(ludność, miasta, złoto). Państwo górzyste i bogate może być warte więcej, ale
+kosztować trzy razy tyle, i to musi być widoczne osobno. Do każdego celu idzie
+lista przeszkód: teren dający premię obrony, mury, brak wspólnego lądu, a także
+stan `Peace`/`Armistice`, przy którym wojsko w ogóle nie wejdzie na cudzą ziemię.
+
 ### Plan produkcji
 
 `plan_produkcji` odpowiada, co budować w każdym mieście — ale nie z samej

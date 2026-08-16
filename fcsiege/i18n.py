@@ -583,6 +583,7 @@ TOOL_NAMES: dict[str, str] = {
     "plan_tury": "turn_plan",
     "plan_badan": "research_plan",
     "plan_produkcji": "production_plan",
+    "ocena_zagrozenia": "threat_assessment",
     "mobilnosc": "mobility",
     "alerty": "alerts",
     "uklady_dyplomatyczne": "treaties",
@@ -701,6 +702,15 @@ TOOL_DESC: dict[str, str] = {
         "of troops standing in the field. Call it for questions about "
         "regrouping, an overstretched front, \"will I make it\", \"where do "
         "I gather\", \"should I uncover this border\".",
+    "ocena_zagrozenia":
+        "Who is a real threat and who merely looks dangerous on the nation "
+        "list. A raw unit count says nothing — an army on the far side of the "
+        "map, with no land connection and no transport, will never take a "
+        "city. The tool measures the ability to USE force: the real hex march "
+        "to your nearest city, whether a shared landmass exists, whether they "
+        "own ships with cargo capacity. Separately it rates how easy they are "
+        "to attack — the terrain of their cities, their walls, their gold — "
+        "because those are two different questions.",
     "plan_produkcji":
         "What to build in every city, against both the strategy AND the "
         "international situation. Strategy alone is not enough: with free land "

@@ -361,6 +361,7 @@ class Handler(BaseHTTPRequestHandler):
         ("plan_tury", {}),
         ("plan_badan", {"strategia": "gospodarka"}),
         ("plan_produkcji", {}),
+        ("ocena_zagrozenia", {}),
     )
 
     def _analysis(self) -> None:

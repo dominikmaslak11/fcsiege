@@ -1812,6 +1812,225 @@ class Intel:
 
 
 
+
+    # ------------------------------------------------------ ocena zagrozenia
+
+    def threat_assessment(self, rs, tury: int = 8) -> dict:
+        """Kto realnie zagraza, a kto tylko wyglada grozniе na liscie nacji.
+
+        Sama liczba jednostek nie mowi nic: wojsko po drugiej stronie mapy,
+        bez drogi ladowej i bez floty, nie zajmie zadnego miasta. Liczymy wiec
+        zdolnosc do UZYCIA sily - realny marsz po heksie, istnienie polaczenia
+        ladowego, posiadanie transportu - i osobno latwosc uderzenia w druga
+        strone, bo to sa dwie rozne rzeczy.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        ct = city_tiles(s)
+        dzicy = {"Animal Kingdom", "Barbarian", "Pirate"}
+
+        moje_miasta = [(int(r["x"]), int(r["y"]), str(r["name"]))
+                       for r in (s._sections[s.me.slot].table("c").dicts()
+                                 if s._sections[s.me.slot].table("c") else [])]
+        if not moje_miasta:
+            return {"blad": "brak miast"}
+
+        def is_land(x, y):
+            n = tmap.terrain(x, y)
+            t = rs.terrains.get(n) if n else None
+            return bool(t and t.is_land)
+
+        try:
+            lad = regions(tmap, is_land, self.geom)
+        except Exception:  # noqa: BLE001
+            lad = {}
+        moje_lady = {lad.get((x, y)) for x, y, _n in moje_miasta}
+
+        stany = {}
+        tbl = s._sections[s.me.slot].table("diplstate")
+        for idx, r in enumerate(tbl.dicts() if tbl else []):
+            if idx in s.players:
+                stany[idx] = (str(r.get("current") or "?"),
+                              int(r.get("turns_left") or 0))
+
+        wyniki = []
+        for slot, pl in s.players.items():
+            if slot == s.me.slot or pl.nation in dzicy:
+                continue
+            stan, tur_do_zmiany = stany.get(slot, ("?", 0))
+            if stan in ("Never met", "?"):
+                continue
+            sec = s._sections.get(slot)
+            tb = sec.table("c") if sec else None
+            ich = [(int(r.get("x") or 0), int(r.get("y") or 0),
+                    str(r.get("name") or "?"), int(r.get("size") or 0),
+                    set(s._bits(r.get("improvements"))))
+                   for r in (tb.dicts() if tb else [])]
+            if not ich:
+                continue
+
+            zaczepne, obronne, floty = [], [], []
+            for u in s.units_of(slot):
+                ut = rs.units.get(u.type)
+                if not ut or "NonMil" in ut.flags:
+                    if ut and getattr(ut, "transport_cap", 0):
+                        floty.append(ut)
+                    continue
+                if ut.attack > 1:
+                    zaczepne.append(ut)
+                elif ut.defense > 0:
+                    obronne.append(ut)
+            # flota liczy sie tylko wtedy, gdy ma czym przewiezc wojsko
+            ma_flote = any((t2 := rs.units.get(u.type)) is not None
+                           and rs.uclass_of(t2).name in ("Sea", "Trireme")
+                           and t2.transport_cap > 0
+                           for u in s.units_of(slot))
+
+            # najkrotszy dystans miasto-miasto i czy istnieje droga ladowa
+            najblizej, para = None, None
+            wspolny_lad = False
+            for ix, iy, inazwa, _sz, _b in ich:
+                for mx, my, mnazwa in moje_miasta:
+                    d = self.geom.real_distance((ix, iy), (mx, my))
+                    if najblizej is None or d < najblizej:
+                        najblizej, para = d, (inazwa, mnazwa)
+                if lad.get((ix, iy)) in moje_lady:
+                    wspolny_lad = True
+
+            # ile tur marszu ich najlepsza jednostka potrzebuje do mojego miasta
+            marsz = None
+            wzor = (max(zaczepne, key=lambda u: u.attack) if zaczepne
+                    else (obronne[0] if obronne else None))
+            if wzor is not None and wspolny_lad:
+                for ix, iy, _n, _sz, _b in ich:
+                    for mx, my, _mn in moje_miasta:
+                        if self.geom.real_distance((ix, iy), (mx, my)) > \
+                                max(1, wzor.move_rate) * (tury + 2):
+                            continue
+                        t3 = march_turns(rs, tmap, self.geom, wzor, (ix, iy),
+                                         (mx, my), max_nodes=6000, cities=ct)
+                        if t3 is not None and (marsz is None or t3 < marsz):
+                            marsz = t3
+
+            ludnosc = sum(sz for _x, _y, _n, sz, _b in ich)
+            zloto = sec.int("gold") if sec else 0
+
+            # --- zdolnosc uderzenia W NAS
+            if not zaczepne:
+                zdolnosc, czemu = 0, "nie ma ani jednej jednostki zdolnej do natarcia"
+            elif not wspolny_lad and not ma_flote:
+                zdolnosc, czemu = 0, "inny ląd i brak floty — nie ma jak dotrzeć"
+            elif not wspolny_lad:
+                zdolnosc, czemu = 2, "inny ląd, ale ma flotę — desant możliwy"
+            elif marsz is None:
+                zdolnosc, czemu = 1, "wspólny ląd, ale marsz dłuższy niż horyzont"
+            elif marsz <= 2:
+                zdolnosc, czemu = 5, f"dojdzie w {marsz + 1} tur — może uderzyć i się wycofać"
+            elif marsz <= 5:
+                zdolnosc, czemu = 3, f"dojdzie w {marsz + 1} tur"
+            else:
+                zdolnosc, czemu = 1, f"dojdzie dopiero w {marsz + 1} tur"
+
+            zagrozenie = zdolnosc * (1 + len(zaczepne) * 0.5)
+            if stan == "War":
+                zagrozenie *= 2
+            elif stan == "Cease-fire":
+                zagrozenie *= 1.5
+
+            # --- jak latwo NAM uderzyc na nich
+            teren = collections.Counter()
+            mury = 0
+            for ix, iy, _n, _sz, b in ich:
+                nm = tmap.terrain(ix, iy)
+                if nm:
+                    teren[nm] += 1
+                if "City Walls" in b:
+                    mury += 1
+            trudny = sum(v for k, v in teren.items()
+                         if (t4 := rs.terrains.get(k)) and t4.defense_bonus >= 50)
+            wyniki.append({
+                "nacja": pl.nation,
+                "stan": stan,
+                "tur_do_zmiany_stanu": tur_do_zmiany or None,
+                "miast": len(ich), "ludnosc": ludnosc, "zloto": zloto,
+                "jednostek_zaczepnych": len(zaczepne),
+                "jednostek_obronnych": len(obronne),
+                "ma_flote": ma_flote,
+                "wspolny_lad": wspolny_lad,
+                "najblizsza_para_miast": para,
+                "dystans": najblizej,
+                "tur_marszu_do_mnie": (marsz + 1) if marsz is not None else None,
+                "zdolnosc_uderzenia": zdolnosc,
+                "dlaczego": czemu,
+                "ocena_zagrozenia": round(zagrozenie, 1),
+                "dla_mnie_jako_cel": {
+                    "teren_ich_miast": dict(teren.most_common(3)),
+                    "miast_na_trudnym_terenie": trudny,
+                    "miast_z_murami": mury,
+                    "ich_zloto": zloto,
+                    "latwosc": ("łatwy" if trudny == 0 and mury == 0 else
+                                "trudny" if trudny >= len(ich) / 2 else "średni"),
+                },
+            })
+
+        # --- kolejnosc podboju: blisko, latwo, bogato
+        #
+        # Wartosc celu i latwosc jego zdobycia to co innego niz zagrozenie
+        # z jego strony. Panstwo gorzyste i bogate moze byc warte wiecej, ale
+        # kosztowac trzy razy tyle - i to musi byc widoczne osobno.
+        cele = []
+        for w in wyniki:
+            c = w["dla_mnie_jako_cel"]
+            blisko = max(0.0, 12 - (w["dystans"] or 20)) / 12      # 0..1
+            latwo = {"łatwy": 1.0, "średni": 0.55, "trudny": 0.25}[c["latwosc"]]
+            latwo *= max(0.3, 1 - c["miast_z_murami"] / max(1, w["miast"]))
+            wartosc = w["ludnosc"] * 2 + w["miast"] * 3 + c["ich_zloto"] / 40
+            oplacalnosc = wartosc * latwo * (0.4 + 0.6 * blisko)
+            przeszkody = []
+            if c["miast_na_trudnym_terenie"]:
+                przeszkody.append(
+                    f"{c['miast_na_trudnym_terenie']} z {w['miast']} miast na "
+                    f"terenie dającym premię obrony — potrzebne machiny "
+                    f"oblężnicze albo przewaga liczebna")
+            if not w["wspolny_lad"]:
+                przeszkody.append("inny ląd — potrzebny transport morski")
+            if c["miast_z_murami"]:
+                przeszkody.append(f"{c['miast_z_murami']} miast z murami")
+            if w["stan"] in ("Peace", "Armistice"):
+                przeszkody.append(
+                    f"stan {w['stan']} — wojsko nie wejdzie na ich terytorium "
+                    f"bez wypowiedzenia wojny")
+            cele.append({
+                "nacja": w["nacja"], "stan": w["stan"],
+                "dystans": w["dystans"],
+                "miast": w["miast"], "ludnosc": w["ludnosc"],
+                "ich_zloto": c["ich_zloto"],
+                "teren": c["teren_ich_miast"],
+                "latwosc": c["latwosc"],
+                "oplacalnosc": round(oplacalnosc, 1),
+                "przeszkody": przeszkody,
+            })
+        cele.sort(key=lambda c: -c["oplacalnosc"])
+
+        wyniki.sort(key=lambda w: -w["ocena_zagrozenia"])
+        realni = [w["nacja"] for w in wyniki if w["ocena_zagrozenia"] >= 3]
+        pozorni = [w["nacja"] for w in wyniki
+                   if w["ocena_zagrozenia"] < 1 and w["jednostek_zaczepnych"]]
+        return {
+            "horyzont_tur": tury,
+            "realne_zagrozenie": realni,
+            "kolejnosc_podboju": cele,
+            "grozni_tylko_na_papierze": pozorni,
+            "nacje": wyniki,
+            "jak_liczone": (
+                "zdolność uderzenia liczona z realnego marszu po heksie i "
+                "istnienia połączenia lądowego albo floty, nie z samej liczby "
+                "jednostek; mnożona przez stan dyplomatyczny (wojna ×2, "
+                "zawieszenie broni ×1,5)"),
+        }
+
     # ------------------------------------------------------- plan produkcji
 
     def production_plan(self, rs, strategia: str = "auto") -> dict:
@@ -4100,6 +4319,10 @@ class IntelMixin:
         return self._need_intel().mobility(
             self._intel_ruleset(), int(args.get("tury") or 2),
             str(args.get("jednostka", "")))
+
+    def ai_threats(self, args: dict) -> dict:
+        return self._need_intel().threat_assessment(
+            self._intel_ruleset(), int(args.get("tury") or 8))
 
     def ai_production_plan(self, args: dict) -> dict:
         return self._need_intel().production_plan(
