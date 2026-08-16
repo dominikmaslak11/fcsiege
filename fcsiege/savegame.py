@@ -5289,8 +5289,23 @@ class Intel:
                         # obecnosc jest wymogiem, a nie gdy inny budynek go
                         # sprawdza (Mausoleum vs City Walls)
                         wlasne = [q for q in eff.reqs if q.type == "Building"]
-                        if not (len(wlasne) == 1 and wlasne[0].name == bnm
-                                and wlasne[0].present):
+                        moj = [q for q in wlasne if q.name == bnm and q.present]
+                        if not moj:
+                            continue
+                        # efekt liczy sie do wartosci TEGO budynku takze wtedy,
+                        # gdy wymaga jeszcze innych - pod warunkiem, ze tamte
+                        # juz mam. Swiatynia po zbudowaniu Temple of Artemis
+                        # daje +2 wlasne I +2 z cudu; bez tego narzedzie
+                        # zaniza ja o polowe.
+                        reszta_ok = True
+                        for q in wlasne:
+                            if q.name == bnm:
+                                continue
+                            pool = blds if q.range.lower() == "city" else mine_blds
+                            if (q.name in pool) != q.present:
+                                reszta_ok = False
+                                break
+                        if not reszta_ok:
                             continue
                         # ...i tylko wtedy, gdy POZOSTALE warunki tez sa
                         # spelnione: drugi punkt Swiatyni wisi na Mysticism,
