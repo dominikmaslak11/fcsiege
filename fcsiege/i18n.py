@@ -366,7 +366,14 @@ KEYS: dict[str, str] = {
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
     "faza": "stage", "nastawienie": "posture",
-    "strategia": "strategy", "co_to_znaczy": "what_it_means",
+    "strategia": "strategy", "sytuacja": "situation",
+    "zawieszenie_broni_wygasa": "ceasefire_expires", "za_tur": "in_turns",
+    "obcych_jednostek_zdolnych_do_ataku": "foreign_units_able_to_attack",
+    "wolnych_miejsc_pod_miasto": "free_city_sites", "robotnikow": "workers",
+    "zaleglosc_robot_w_turach": "work_backlog_turns",
+    "miast_bez_garnizonu": "cities_without_garrison",
+    "tarcz_na_ture": "shields_per_turn",
+    "budowle_bez_utrzymania_do_wziecia": "zero_upkeep_buildings_available", "co_to_znaczy": "what_it_means",
     "dostepne_strategie": "available_strategies", "kolejnosc": "order",
     "ocena": "score", "ocena_na_technologie": "score_per_tech",
     "ocena_na_ture": "score_per_turn", "technologii_do_zdobycia": "techs_to_acquire",
@@ -575,6 +582,7 @@ TOOL_NAMES: dict[str, str] = {
     "plan_kampanii": "campaign_plan",
     "plan_tury": "turn_plan",
     "plan_badan": "research_plan",
+    "plan_produkcji": "production_plan",
     "mobilnosc": "mobility",
     "alerty": "alerts",
     "uklady_dyplomatyczne": "treaties",
@@ -693,6 +701,15 @@ TOOL_DESC: dict[str, str] = {
         "of troops standing in the field. Call it for questions about "
         "regrouping, an overstretched front, \"will I make it\", \"where do "
         "I gather\", \"should I uncover this border\".",
+    "plan_produkcji":
+        "What to build in every city, against both the strategy AND the "
+        "international situation. Strategy alone is not enough: with free land "
+        "a settler beats any building, and with a cease-fire about to expire a "
+        "diplomat beats a settler. The tool first assesses the situation — how "
+        "many free city sites there are, who actually has anything to attack "
+        "with, which treaties are expiring, how far the worker backlog runs, "
+        "which cities stand without a garrison — and only then assigns roles. "
+        "Strategy 'auto' infers it from the situation.",
     "plan_badan":
         "The research order for a CHOSEN STRATEGY, with a numeric rationale. "
         "Every technology is scored by what it unlocks: buildings weighted by "

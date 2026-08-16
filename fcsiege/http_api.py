@@ -360,6 +360,7 @@ class Handler(BaseHTTPRequestHandler):
         ("plan_kampanii", {"tury": 2}),
         ("plan_tury", {}),
         ("plan_badan", {"strategia": "gospodarka"}),
+        ("plan_produkcji", {}),
     )
 
     def _analysis(self) -> None:

@@ -1811,6 +1811,214 @@ class Intel:
 
 
 
+
+    # ------------------------------------------------------- plan produkcji
+
+    def production_plan(self, rs, strategia: str = "auto") -> dict:
+        """Co budowac w kazdym miescie, wzgledem strategii I sytuacji zewnetrznej.
+
+        Sama strategia nie wystarcza: przy wolnej ziemi osadnik bije kazdy
+        budynek, a przy wygasajacym zawieszeniu broni obrona bije osadnika.
+        Dlatego najpierw oceniamy sytuacje - ile jest miejsca, kto grozi, ilu
+        robotnikow brakuje do zaleglosci - a dopiero potem przydzielamy role.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        tmap = TerrainMap(s)
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        if not rows:
+            return {"blad": "brak miast"}
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+
+        # ---------- sytuacja miedzynarodowa
+        dzicy = {"Animal Kingdom", "Barbarian", "Pirate"}
+        stany = {}
+        tbl = sec.table("diplstate")
+        for idx, r in enumerate(tbl.dicts() if tbl else []):
+            if idx in s.players and idx != s.me.slot:
+                stany[s.players[idx].nation] = (str(r.get("current") or "?"),
+                                                int(r.get("turns_left") or 0))
+        wojna = [n for n, (st, _t) in stany.items()
+                 if st == "War" and n not in dzicy]
+        wygasa = [(n, t) for n, (st, t) in stany.items() if st == "Cease-fire"]
+        # czy ktokolwiek ma czym uderzyc
+        obce_zaczepne = 0
+        for slot, pl in s.players.items():
+            if slot == s.me.slot or pl.nation in dzicy:
+                continue
+            if stany.get(pl.nation, ("?", 0))[0] in ("Alliance", "Team"):
+                continue
+            for u in s.units_of(slot):
+                ut = rs.units.get(u.type)
+                if ut and ut.attack > 1 and "NonMil" not in ut.flags:
+                    obce_zaczepne += 1
+
+        # ---------- ile jest miejsca na nowe miasta
+        def is_land(x, y):
+            n = tmap.terrain(x, y)
+            t = rs.terrains.get(n) if n else None
+            return bool(t and t.is_land)
+
+        wszystkie_miasta = [(int(r["x"]), int(r["y"])) for r in rows]
+        for slot, ss in s._sections.items():
+            if slot == s.me.slot:
+                continue
+            tb = ss.table("c") if ss else None
+            for r in (tb.dicts() if tb else []):
+                wszystkie_miasta.append((int(r.get("x") or 0), int(r.get("y") or 0)))
+        try:
+            obszary = regions(tmap, is_land, self.geom)
+        except Exception:  # noqa: BLE001
+            obszary = {}
+        moje_obszary = {obszary.get(m) for m in
+                        [(int(r["x"]), int(r["y"])) for r in rows]}
+        wolne = 0
+        for tile, g in obszary.items():
+            if g not in moje_obszary:
+                continue
+            if all(self.geom.real_distance(tile, m) >= 3 for m in wszystkie_miasta):
+                n = tmap.terrain(*tile)
+                t = rs.terrains.get(n) if n else None
+                if t and t.food + t.shield >= 2:
+                    wolne += 1
+
+        # ---------- zaleglosc robotnicza
+        try:
+            wzrost = self.growth_potential(rs)
+            tur_pracy = wzrost.get("tur_pracy_lacznie", 0)
+        except Exception:  # noqa: BLE001
+            tur_pracy = 0
+        robotnicy = sum(1 for u in s.units_of(s.me.slot)
+                        if (ut := rs.units.get(u.type))
+                        and "Settlers" in ut.flags and "Cities" not in ut.flags
+                        and "AddToCity" not in ut.flags)
+        tur_zaleglosci = tur_pracy // max(1, robotnicy)
+
+        # ---------- strategia
+        if strategia == "auto":
+            if wojna or obce_zaczepne > 3:
+                strategia = "wojna"
+            elif wolne >= 20:
+                strategia = "ekspansja"
+            else:
+                strategia = "gospodarka"
+
+        # ---------- co da sie zbudowac
+        def buduje_sie(u) -> bool:
+            return u.build_cost > 0 and "NoBuild" not in u.flags
+
+        osadnik = next((u for u in rs.units_available(techs)
+                        if "Cities" in u.flags and buduje_sie(u)), None)
+        robotnik = next((u for u in rs.units_available(techs)
+                         if "Settlers" in u.flags and "Cities" not in u.flags
+                         and "AddToCity" not in u.flags and buduje_sie(u)), None)
+        obroncy = sorted((u for u in rs.units_available(techs)
+                          if u.defense > 0 and buduje_sie(u)
+                          and "NonMil" not in u.flags
+                          and rs.uclass_of(u).name in ("Land", "Small Land")),
+                         key=lambda u: u.build_cost / max(1, u.defense))
+        obronca = obroncy[0] if obroncy else None
+        dyplomata = next((u for u in rs.units_available(techs)
+                          if "Diplomat" in u.flags and buduje_sie(u)), None)
+
+        darmowe = sorted((b for b in rs.buildings.values()
+                          if not b.is_wonder and b.upkeep == 0
+                          and b.build_cost > 0
+                          and all(t in techs for t in b.req_techs())),
+                         key=lambda b: b.build_cost)
+
+        garnizon = collections.Counter()
+        for u in s.units_of(s.me.slot):
+            ut = rs.units.get(u.type)
+            if ut and (ut.attack or ut.defense) and "NonMil" not in ut.flags:
+                garnizon[(u.x, u.y)] += 1
+        ma_dyplomate = any(rs.units.get(u.type)
+                           and "Diplomat" in rs.units[u.type].flags
+                           for u in s.units_of(s.me.slot))
+        buduje_dyplomate = sum(1 for r in rows
+                               if dyplomata and
+                               str(r.get("currently_building_name")) == dyplomata.name)
+
+        plan, potrzeba_dyplomaty = [], bool(wygasa) and not ma_dyplomate
+        for r in rows:
+            x, y = int(r["x"]), int(r["y"])
+            nazwa = str(r.get("name") or "?")
+            rozmiar = int(r.get("size") or 0)
+            teraz = str(r.get("currently_building_name") or "")
+            blds = set(s._bits(r.get("improvements")))
+            tarcze = int(r.get("last_turns_shield_surplus") or 0)
+            brak_darmowych = [b for b in darmowe if b.name not in blds]
+
+            if obronca and not garnizon.get((x, y)):
+                co, why = obronca.name, (
+                    f"miasto bez garnizonu — {obronca.build_cost} tarcz daje "
+                    f"obronę, stan wojenny i podwojony koszt przekupienia")
+            elif potrzeba_dyplomaty and dyplomata and buduje_dyplomate == 0:
+                co, why = dyplomata.name, (
+                    f"zawieszenie broni z {wygasa[0][0]} wygasa do wojny za "
+                    f"{wygasa[0][1]} tur — ambasada jest tańsza niż wojna")
+                potrzeba_dyplomaty = False
+            elif strategia == "wojna" and obroncy:
+                zaczepny = max((u for u in rs.units_available(techs)
+                                if buduje_sie(u) and "NonMil" not in u.flags),
+                               key=lambda u: u.attack, default=None)
+                co = (zaczepny or obronca).name
+                why = "trwa wojna — jednostki przed rozbudową"
+            elif (strategia == "ekspansja" and osadnik
+                  and rozmiar > osadnik.pop_cost and wolne >= 5):
+                co, why = osadnik.name, (
+                    f"{wolne} wolnych miejsc pod miasto — nowe miasto bije "
+                    f"każdy budynek, a rozmiar {rozmiar} na to pozwala")
+            elif robotnik and tur_zaleglosci > 12:
+                co, why = robotnik.name, (
+                    f"zaległość robót to {tur_zaleglosci} tur przy "
+                    f"{robotnicy} robotnikach — teren czeka")
+            elif brak_darmowych:
+                b = brak_darmowych[0]
+                co, why = (b.label or b.name), (
+                    f"{b.build_cost} tarcz i ZERO utrzymania — jedyna kategoria "
+                    f"budowli, która nie obciąża budżetu")
+            elif osadnik and rozmiar > osadnik.pop_cost and wolne >= 5:
+                co, why = osadnik.name, f"jeszcze {wolne} wolnych miejsc"
+            elif robotnik:
+                co, why = robotnik.name, "zawsze jest co ulepszać"
+            else:
+                co, why = "Coinage", "brak sensownego celu"
+
+            plan.append({
+                "miasto": nazwa, "rozmiar": rozmiar, "tarcz_na_ture": tarcze,
+                "buduje_teraz": teraz, "buduj": co, "dlaczego": why,
+                "zmiana": teraz != co,
+                "garnizon": garnizon.get((x, y), 0),
+                "budowle_bez_utrzymania_do_wziecia":
+                    [b.label or b.name for b in brak_darmowych][:3],
+            })
+
+        return {
+            "strategia": strategia,
+            "sytuacja": {
+                "wojna_z": wojna,
+                "zawieszenie_broni_wygasa": [{"nacja": n, "za_tur": t}
+                                             for n, t in wygasa],
+                "obcych_jednostek_zdolnych_do_ataku": obce_zaczepne,
+                "wolnych_miejsc_pod_miasto": wolne,
+                "robotnikow": robotnicy,
+                "zaleglosc_robot_w_turach": tur_zaleglosci,
+                "miast_bez_garnizonu": sum(1 for p in plan if not p["garnizon"]),
+            },
+            "produkcja": plan,
+            "do_zmiany": sum(1 for p in plan if p["zmiana"]),
+            "zasada": (
+                "kolejność potrzeb: garnizon → dyplomacja przed wygaśnięciem "
+                "układu → strategia → budowle bez utrzymania → robotnicy"),
+        }
+
     # ---------------------------------------------------------- plan badan
 
     STRATEGIE = {
@@ -3892,6 +4100,10 @@ class IntelMixin:
         return self._need_intel().mobility(
             self._intel_ruleset(), int(args.get("tury") or 2),
             str(args.get("jednostka", "")))
+
+    def ai_production_plan(self, args: dict) -> dict:
+        return self._need_intel().production_plan(
+            self._intel_ruleset(), str(args.get("strategia", "auto")))
 
     def ai_research_plan(self, args: dict) -> dict:
         return self._need_intel().research_plan(

@@ -583,6 +583,27 @@ dróg**, dystans do stolicy i otoczenie. Miasto bez dróg i portu jest
 obciążeniem, nie nabytkiem — kosztuje utrzymanie, garnizon i szczęście, a nie
 daje produkcji.
 
+### Plan produkcji
+
+`plan_produkcji` odpowiada, co budować w każdym mieście — ale nie z samej
+strategii, tylko z **sytuacji**. Bo strategia sama w sobie nie wystarcza:
+przy wolnej ziemi osadnik bije każdy budynek, a przy wygasającym zawieszeniu
+broni dyplomata bije osadnika.
+
+Narzędzie ocenia najpierw stan świata:
+
+| co sprawdza | po co |
+|---|---|
+| wolne miejsca pod miasta na własnym kontynencie | czy ekspansja ma jeszcze sens |
+| obce jednostki **zdolne do ataku** (atak > 1) | czy ktokolwiek realnie zagraża |
+| układy wygasające **do wojny** | czy pilniejszy jest dyplomata |
+| zaległość robót podzielona przez liczbę robotników | czy dokładać robotników |
+| miasta bez garnizonu | bo garnizon to obrona, stan wojenny i obrona przed przekupieniem |
+
+Dopiero potem przydziela role, w kolejności: **garnizon → dyplomacja przed
+wygaśnięciem układu → strategia → budowle bez utrzymania → robotnicy**.
+Strategia `auto` rozpoznaje kierunek z sytuacji.
+
 ### Plan badań pod strategię
 
 `plan_badan` szereguje technologie względem **obranej strategii**:

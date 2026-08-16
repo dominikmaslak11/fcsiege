@@ -139,6 +139,15 @@ class Terrain:
     name: str
     defense_bonus: int
     movement_cost: int
+    food: int = 0
+    shield: int = 0
+    trade: int = 0
+    irrigation_food_incr: int = 0
+    irrigation_time: int = 0
+    cultivate_result: str = ""
+    cultivate_time: int = 0
+    transform_result: str = ""
+    transform_time: int = 0
     tclass: str = "Land"
     flags: set[str] = field(default_factory=set)
     native_to: set[str] = field(default_factory=set)
@@ -353,6 +362,15 @@ class Ruleset:
                 name=rule_name_of(sec),
                 defense_bonus=sec.int("defense_bonus"),
                 movement_cost=sec.int("movement_cost", 1),
+                food=sec.int("food"),
+                shield=sec.int("shield"),
+                trade=sec.int("trade"),
+                irrigation_food_incr=sec.int("irrigation_food_incr"),
+                irrigation_time=sec.int("irrigation_time"),
+                cultivate_result=clean_name(sec.str("cultivate_result")),
+                cultivate_time=sec.int("cultivate_time"),
+                transform_result=clean_name(sec.str("transform_result")),
+                transform_time=sec.int("transform_time"),
                 tclass=clean_name(sec.str("class", "Land")),
                 flags=set(str(f) for f in sec.list("flags")),
                 native_to=set(clean_name(str(c)) for c in sec.list("native_to")),

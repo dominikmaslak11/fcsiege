@@ -405,6 +405,28 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "plan_produkcji",
+        "description": (
+            "Co budować w każdym mieście, względem strategii I sytuacji "
+            "międzynarodowej. Sama strategia nie wystarcza: przy wolnej ziemi "
+            "osadnik bije każdy budynek, a przy wygasającym zawieszeniu broni "
+            "dyplomata bije osadnika. Narzędzie ocenia najpierw sytuację — ile "
+            "jest wolnych miejsc pod miasta, kto ma czym uderzyć, które układy "
+            "wygasają, ilu robotników brakuje do zaległości, które miasta stoją "
+            "bez garnizonu — a dopiero potem przydziela role. Strategia "
+            "'auto' rozpoznaje ją z sytuacji."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "strategia": {"type": "string",
+                              "enum": ["auto", "gospodarka", "nauka",
+                                       "ekspansja", "wojna"]},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "plan_badan",
         "description": (
             "Kolejność badań pod OBRANĄ STRATEGIĘ, z uzasadnieniem liczbowym. "
@@ -717,6 +739,7 @@ TOOL_METHOD = {
     "plan_kampanii": "ai_campaign",
     "plan_tury": "ai_turn_plan",
     "plan_badan": "ai_research_plan",
+    "plan_produkcji": "ai_production_plan",
     "mobilnosc": "ai_mobility",
     "obrona_miasta": "ai_city_defense",
     "alerty": "ai_alerts",
@@ -828,6 +851,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_turn_plan(dict(args))
     if name == "plan_badan":
         return bridge.ai_research_plan(dict(args))
+    if name == "plan_produkcji":
+        return bridge.ai_production_plan(dict(args))
     if name == "mobilnosc":
         return bridge.ai_mobility(dict(args))
     if name == "obrona_miasta":
