@@ -542,6 +542,101 @@ def reach_within(rs, tmap: TerrainMap, geom: "MapGeometry", ut,
     return {tile: t for tile, (t, _u) in best.items()}
 
 
+def _tile_bonuses(rs) -> tuple[dict, dict]:
+    """Ile daje irygacja i kopalnia na danym terenie oraz kopalnia w tarczach."""
+    cached = getattr(rs, "_tile_bonus_cache", None)
+    if cached is not None:
+        return cached
+    import os
+
+    from .registry import parse_file
+    mine: dict[str, int] = {}
+    road_pct: dict[str, int] = {}
+    path = os.path.join(rs.path, "terrain.ruleset")
+    if os.path.exists(path):
+        reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+        for sec in reg.prefixed("terrain_"):
+            nm = clean_name(sec.str("rule_name") or sec.str("name"))
+            if not nm:
+                continue
+            mine[nm] = sec.int("mining_shield_incr")
+            road_pct[nm] = sec.int("road_trade_incr_pct")
+    out = (mine, road_pct)
+    try:
+        rs._tile_bonus_cache = out
+    except Exception:  # noqa: BLE001 - reguly moga byc zamrozone
+        pass
+    return out
+
+
+def _road_build_times(rs) -> dict[str, int]:
+    """Ile tur pracy zajmuje zbudowanie drogi na danym terenie."""
+    cached = getattr(rs, "_road_time_cache", None)
+    if cached is not None:
+        return cached
+    import os
+
+    from .registry import parse_file
+    out: dict[str, int] = {}
+    path = os.path.join(rs.path, "terrain.ruleset")
+    if os.path.exists(path):
+        reg = parse_file(path, base_dir=os.path.dirname(rs.path))
+        for sec in reg.prefixed("terrain_"):
+            nm = clean_name(sec.str("rule_name") or sec.str("name"))
+            if nm:
+                out[nm] = sec.int("road_time")
+    try:
+        rs._road_time_cache = out
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def _city_trade(rs, tmap: "TerrainMap", geom: "MapGeometry",
+                x: int, y: int, size: int, blds: set[str]) -> int:
+    """Ile handlu daje miasto z obrabianych kafli.
+
+    Zapis nie trzyma wyliczonych plonow miasta, wiec odtwarzamy je z mapy:
+    bierzemy obszar o promieniu 2, obsadzamy tyle kafli, ilu miasto ma
+    obywateli, i sumujemy handel z terenu, rzeki i drogi. Obywatele ida
+    najpierw za jedzeniem - to przyblizenie, ale bez niego wychodzi sufit
+    handlu, a nie handel faktyczny.
+    """
+    mine, road_pct = _tile_bonuses(rs)
+
+    def yields(a: int, b: int) -> tuple[int, int, int] | None:
+        name = tmap.terrain(a, b)
+        terr = rs.terrains.get(name) if name else None
+        if terr is None:
+            return None
+        f, sh, tr = terr.food, terr.shield, terr.trade
+        if tmap.has_extra("River", a, b):
+            tr += 1
+        if tmap.has_extra("Road", a, b):
+            tr += 1 * road_pct.get(name, 0) // 100
+        if tmap.has_extra("Irrigation", a, b):
+            f += terr.irrigation_food_incr or 0
+        if tmap.has_extra("Mine", a, b):
+            sh += mine.get(name, 0)
+        if terr.flags and "Sea" in terr.flags and (
+                "Harbour" in blds or "Harbor" in blds):
+            f += 1
+        return f, sh, tr
+
+    area = []
+    for dx in range(-3, 4):
+        for dy in range(-4, 5):
+            if (dx, dy) == (0, 0):
+                continue
+            nb = ((x + dx) % geom.xsize, (y + dy) % geom.ysize)
+            if geom.real_distance((x, y), nb) <= 2:
+                area.append(nb)
+    vals = [v for v in (yields(a, b) for a, b in area) if v]
+    vals.sort(key=lambda v: (-v[0], -v[1], -v[2]))
+    centre = yields(x, y) or (0, 0, 0)
+    return sum(v[2] for v in vals[:max(0, size)]) + centre[2]
+
+
 def _road_move_costs(rs) -> dict[str, int]:
     """Koszt ruchu po ulepszeniach liniowych, w ulamkach - wprost z regul."""
     cached = getattr(rs, "_road_move_costs", None)
@@ -4237,6 +4332,397 @@ class Intel:
                 "promien_zasiegu": max_distance,
                 "fronty": sorted(rows, key=lambda r: -r["rozmiar"])}
 
+    # ------------------------------------------------------------ karawany
+
+    def caravan_plan(self, rs, limit: int = 12, max_turns: int = 60,
+                     full: bool = False) -> dict:
+        """Gdzie budowac karawany, dokad je wyslac i czym tam dotrzec.
+
+        Trzy pytania, ktore trzeba rozstrzygnac razem, bo osobno kazde daje
+        zla odpowiedz:
+
+        1. Czy trasa jest legalna - o tym decyduje tabela `[trade] settings`
+           z regul. W sandboksie trasy krajowe daja 0%, wiec liczy sie tylko
+           zagranica, a wojna zeruje wartosc.
+        2. Ile trasa da - liczymy doslownie wzorami z `common/traderoutes.c`
+           w wariancie CLASSIC (oba style sa w ustawieniach partii), a nie
+           przyblizeniem po rozmiarze miasta.
+        3. Czy karawana tam DOJDZIE - i to jest w sandboksie rozstrzygajace.
+           Klasa Merchant nie jest natywna dla zadnego terenu; jest natywna
+           wylacznie dla drogi, kolei i rzeki. Bez ciaglej drogi karawana nie
+           ruszy sie z miejsca i jedyna droga jest transport morski.
+
+        Dlatego kazdy kandydat dostaje trase ladem i trase morzem, a wynik
+        podaje szybsza z nich razem z czasem produkcji - trasa warta 200%
+        osiagalna za trzydziesci tur jest gorsza niz warta 100% za osiem.
+        """
+        import collections
+        import os
+
+        from .registry import parse_file
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        my = s.cities_of(s.me.slot)
+        if not my:
+            return {"blad": "brak moich miast"}
+
+        # --- reguly handlu i ustawienia partii
+        pct: dict[str, int] = {}
+        bonus_kind: dict[str, str] = {}
+        path = os.path.join(rs.path, "game.ruleset")
+        if os.path.exists(path):
+            g = parse_file(path, base_dir=os.path.dirname(rs.path))
+            sec = g.get("trade")
+            tbl = sec.table("settings") if sec else None
+            for r in (tbl.dicts() if tbl else []):
+                pct[str(r.get("type"))] = int(r.get("pct") or 0)
+                bonus_kind[str(r.get("type"))] = str(r.get("bonus") or "")
+
+        st = s.reg.get("settings")
+        stbl = st.table("set") if st else None
+        setting = {str(r.get("name")): r.get("value")
+                   for r in (stbl.dicts() if stbl else [])}
+        mindist = int(setting.get("trademindist") or 9)
+        rel_pct = int(setting.get("tradeworldrelpct") or 0)
+        rev_style = str(setting.get("trade_revenue_style") or "CLASSIC")
+        bon_style = str(setting.get("caravan_bonus_style") or "CLASSIC")
+        xsize = int(setting.get("xsize") or self.geom.xsize)
+        ysize = int(setting.get("ysize") or self.geom.ysize)
+        big = max(xsize, ysize) or 1
+
+        max_routes = 0
+        for eff in rs.effects_by_type.get("Max_Trade_Routes", []):
+            if not eff.reqs:
+                max_routes = max(max_routes, eff.value)
+
+        def weighted(d: int) -> int:
+            return ((100 - rel_pct) * d + rel_pct * (d * 40 // big)) // 100
+
+        # --- jednostki: karawana i prom, ktory ja uniesie
+        techs = _known_techs(s)
+        merch = next((u for u in rs.units.values()
+                      if "HelpWonder" in u.flags or "TradeRoute" in u.flags),
+                     None)
+        if merch is None:
+            return {"blad": "ten zestaw regul nie ma jednostki handlowej"}
+        mclass = rs.uclass_of(merch).name
+        promy = [u for u in rs.units.values()
+                 if mclass in getattr(u, "cargo", ())
+                 and all(t in techs for t in u.req_techs())]
+        prom = max(promy, key=lambda u: u.move_rate) if promy else None
+        prom_brak = sorted({t for u in rs.units.values()
+                            if mclass in getattr(u, "cargo", ())
+                            for t in u.req_techs() if t not in techs})
+
+        # --- po czym Merchant w ogole chodzi (to jest sedno w sandboksie)
+        natywne_tereny = sorted(n for n, t in rs.terrains.items()
+                                if mclass in t.native_to)
+
+        tmap = TerrainMap(s)
+        ct = city_tiles(s)
+        cont = self._continents()
+
+        def coastal(tile) -> bool:
+            for nb in self.geom.neighbours(*tile):
+                nm = tmap.terrain(*nb)
+                terr = rs.terrains.get(nm) if nm else None
+                if terr is not None and not terr.is_land:
+                    return True
+            return False
+
+        # --- ile handlu daje miasto (potrzebne do obu wzorow)
+        handel_cache: dict[tuple[int, int], int] = {}
+
+        def trade_of(x: int, y: int, size: int, blds=()) -> int:
+            key = (x, y)
+            if key in handel_cache:
+                return handel_cache[key]
+            val = _city_trade(rs, tmap, self.geom, x, y, size, set(blds))
+            handel_cache[key] = val
+            return val
+
+        # --- zajete sloty tras
+        sec_me = s._sections[s.me.slot]
+        ctbl = sec_me.table("c")
+        rows = {str(r.get("name")): r for r in (ctbl.dicts() if ctbl else [])}
+        used = collections.Counter()
+        for nm, r in rows.items():
+            used[nm] = sum(1 for i in range(8)
+                           if r.get(f"traderoute{i}") not in (None, 0, "0"))
+
+        foreign = list(s.known_cities())
+        if full:
+            seen = {(c.x, c.y) for c in foreign}
+            for p in s.players.values():
+                if p.slot != s.me.slot:
+                    for c in s.cities_of(p.slot):
+                        if (c.x, c.y) not in seen:
+                            foreign.append(c)
+        nations = {p.slot: p.nation for p in s.players.values()}
+        dipl = s.me.diplomacy
+
+        # --- kandydaci
+        cands, odrzucone = [], collections.Counter()
+        za_blisko: dict[str, dict] = {}
+        for mc in my:
+            r = rows.get(mc.name, {})
+            mc_trade = trade_of(mc.x, mc.y, mc.size, s._bits(r.get("improvements")))
+            for fc in foreign:
+                ic = cont.get((fc.x, fc.y)) != cont.get((mc.x, mc.y))
+                rel = dipl.get(fc.owner, "?")
+                if rel == "Alliance":
+                    kind = "AllyIC" if ic else "Ally"
+                elif rel == "War":
+                    kind = "EnemyIC" if ic else "Enemy"
+                elif rel == "Team":
+                    kind = "TeamIC" if ic else "Team"
+                else:
+                    kind = "INIC" if ic else "IN"
+                value_pct = pct.get(kind, 0)
+                if value_pct <= 0:
+                    odrzucone[f"{kind}: reguly daja 0% wartosci"] += 1
+                    continue
+                d = self.geom.real_distance((mc.x, mc.y), (fc.x, fc.y))
+                if d < mindist:
+                    odrzucone[f"blizej niz trademindist={mindist}"] += 1
+                    # sasiad zza miedzy to typowy kandydat na "zbudujmy tam
+                    # droge" - a wlasnie do niego trasy zalozyc SIE NIE DA
+                    prev = za_blisko.get(fc.name)
+                    if prev is None or d < prev["dystans"]:
+                        za_blisko[fc.name] = {
+                            "partner": fc.name, "nacja": nations.get(fc.owner, "?"),
+                            "rozmiar": fc.size, "najblizsze_moje": mc.name,
+                            "dystans": d, "wymagany_dystans": mindist,
+                            "stan_dyplomatyczny": rel,
+                            "powod": "za blisko — trasy handlowej założyć się nie da",
+                        }
+                    continue
+                fc_trade = trade_of(fc.x, fc.y, fc.size)
+
+                if rev_style.upper().startswith("CLASSIC"):
+                    baza = weighted(d) + mc.size + fc.size
+                else:
+                    baza = (mc_trade + fc_trade + 4) * 3
+                na_ture = baza * value_pct // 100 // 12
+
+                if bon_style.upper().startswith("CLASSIC"):
+                    tb = (weighted(d) + 10) * (mc_trade + fc_trade) // 24
+                else:
+                    tb = 0
+                jednorazowo = tb if bonus_kind.get(kind) != "None" else 0
+
+                cands.append({
+                    "moje_miasto": mc.name, "partner": fc.name,
+                    "nacja": nations.get(fc.owner, "?"),
+                    "stan_dyplomatyczny": rel, "typ_trasy": kind,
+                    "procent_wartosci": value_pct,
+                    "miedzykontynentalna": ic, "dystans": d,
+                    "handel_moj": mc_trade, "handel_partnera": fc_trade,
+                    "handel_na_ture": na_ture,
+                    "zloto_jednorazowo": jednorazowo,
+                    "premia": bonus_kind.get(kind, ""),
+                    "_od": (mc.x, mc.y), "_do": (fc.x, fc.y),
+                })
+
+        # --- osiagalnosc: liczymy tylko dla najlepiej rokujacych, bo kazda
+        #     trasa to osobne przeszukiwanie mapy
+        cands.sort(key=lambda c: -(c["handel_na_ture"] * 10
+                                   + c["zloto_jednorazowo"]))
+        badane = cands[:max(limit * 4, 40)]
+
+        porty = {c.name: coastal((c.x, c.y)) for c in my}
+
+        def ladem(a, b):
+            return march_turns(rs, tmap, self.geom, merch, a, b,
+                               max_nodes=60000, cities=ct)
+
+        def morzem(a, b):
+            if prom is None or not (coastal(a) and coastal(b)):
+                return None
+            return march_turns(rs, tmap, self.geom, prom, a, b,
+                               max_nodes=60000, cities=ct)
+
+        # ile tur pracy robotnika brakuje, zeby DOBUDOWAC droge do celu:
+        # istniejaca droga, rzeka i kafel miasta sa darmowe, reszta kosztuje
+        # `road_time` danego terenu. To odpowiada na pytanie "czy budowac
+        # droge do tego miasta" liczba, a nie przeczuciem.
+        road_time = _road_build_times(rs)
+
+        def brak_drogi(start, goal):
+            import heapq
+            pq = [(0, start)]
+            best = {start: 0}
+            while pq:
+                c, cur = heapq.heappop(pq)
+                if cur == goal:
+                    return c
+                if c > best.get(cur, 1 << 30):
+                    continue
+                for nb in self.geom.neighbours(*cur):
+                    nm = tmap.terrain(*nb)
+                    terr = rs.terrains.get(nm) if nm else None
+                    if terr is None or not terr.is_land:
+                        continue
+                    darmowy = (nb in ct or tmap.has_extra("Road", *nb)
+                               or tmap.has_extra("River", *nb))
+                    nxt = c + (0 if darmowy else max(1, road_time.get(nm, 2)))
+                    if nxt < best.get(nb, 1 << 30):
+                        best[nb] = nxt
+                        heapq.heappush(pq, (nxt, nb))
+            return None
+
+        wynik = []
+        for c in badane:
+            l = ladem(c["_od"], c["_do"])
+            m = morzem(c["_od"], c["_do"])
+            drogi = []
+            if l is not None:
+                drogi.append(("drogą/rzeką", l))
+            if m is not None:
+                drogi.append((f"morzem ({prom.name})", m + 1))
+            if not drogi:
+                c["osiagalne"] = False
+                c["czym"] = ("nie dojdzie: klasa " + mclass +
+                             " chodzi tylko po drogach i rzekach, "
+                             "a promu nie mam" if prom is None else
+                             "nie dojdzie: brak drogi i brak trasy morskiej")
+            else:
+                czym, tur = min(drogi, key=lambda p: p[1])
+                c["osiagalne"] = True
+                c["czym"] = czym
+                c["tur_marszu"] = tur
+                c["warianty"] = {k: v for k, v in drogi}
+            c["tur_pracy_na_droge"] = 0 if l is not None else None
+            wynik.append(c)
+
+        # Analiza drogowa idzie osobnym przebiegiem po WSZYSTKICH kandydatach
+        # z mojego kontynentu, a nie po czolowce rankingu: trasa morska przez
+        # pol swiata bije w punktach sasiada zza miedzy, a to wlasnie do
+        # sasiada oplaca sie dosypac kilka kafli drogi.
+        laczone = {(c["moje_miasto"], c["partner"]): c for c in wynik}
+        droga_do = []
+        for c in cands:
+            if c["miedzykontynentalna"]:
+                continue
+            juz = laczone.get((c["moje_miasto"], c["partner"]))
+            if juz is not None and juz.get("osiagalne") and \
+                    juz.get("czym", "").startswith("drogą"):
+                continue                     # droga juz jest
+            praca = brak_drogi(c["_od"], c["_do"])
+            if praca is None or praca <= 0:
+                continue
+            droga_do.append({
+                "partner": c["partner"], "nacja": c["nacja"],
+                "z_miasta": c["moje_miasto"], "dystans": c["dystans"],
+                "tur_pracy_na_droge": praca,
+                "handel_na_ture": c["handel_na_ture"],
+                "zloto_jednorazowo": c["zloto_jednorazowo"],
+                "typ_trasy": c["typ_trasy"],
+                "stan_dyplomatyczny": c["stan_dyplomatyczny"],
+            })
+        # najtansza droga do kazdego partnera
+        naj: dict[str, dict] = {}
+        for r in sorted(droga_do, key=lambda r: r["tur_pracy_na_droge"]):
+            naj.setdefault(r["partner"], r)
+
+        osiagalne = [c for c in wynik if c.get("osiagalne")]
+
+        # --- produkcja: gdzie karawana powstanie najszybciej
+        koszt = merch.build_cost
+        produkcja = {}
+        for mc in my:
+            r = rows.get(mc.name, {})
+            nadw = int(r.get("last_turns_shield_surplus") or 0)
+            zapas = int(r.get("shield_stock") or 0)
+            kind = str(r.get("currently_building_kind") or "")
+            brak = max(0, koszt - zapas)
+            tur = None if nadw <= 0 else -(-brak // nadw)
+            produkcja[mc.name] = {
+                "nadwyzka_tarcz": nadw, "zapas_tarcz": zapas,
+                "tur_na_karawane": tur,
+                "buduje_teraz": r.get("currently_building_name"),
+                "kara_za_zmiane": ("50% zapasu — zmiana budynek→jednostka"
+                                   if kind == "Building" else "brak"),
+                "port": porty.get(mc.name, False),
+                "wolnych_slotow": (max_routes - used[mc.name]
+                                   if max_routes else None),
+            }
+
+        # --- plan: najlepsza trasa dla kazdego miasta, ktore ma jeszcze slot
+        plan, zajete = [], collections.Counter()
+        for c in sorted(osiagalne,
+                        key=lambda c: (-(c["handel_na_ture"] * 10
+                                         + c["zloto_jednorazowo"])
+                                       / max(1, c["tur_marszu"]))):
+            nm = c["moje_miasto"]
+            p = produkcja[nm]
+            if max_routes and used[nm] + zajete[nm] >= max_routes:
+                continue
+            if p["tur_na_karawane"] is None:
+                continue
+            razem = p["tur_na_karawane"] + c["tur_marszu"]
+            if razem > max_turns:
+                continue
+            zajete[nm] += 1
+            plan.append({
+                "buduj_w": nm,
+                "tur_produkcji": p["tur_na_karawane"],
+                "wyslij_do": c["partner"], "nacja": c["nacja"],
+                "stan_dyplomatyczny": c["stan_dyplomatyczny"],
+                "czym": c["czym"], "tur_marszu": c["tur_marszu"],
+                "tur_razem": razem,
+                "tur_pracy_na_droge": c.get("tur_pracy_na_droge"),
+                "dystans": c["dystans"],
+                "typ_trasy": c["typ_trasy"],
+                "procent_wartosci": c["procent_wartosci"],
+                "handel_na_ture": c["handel_na_ture"],
+                "zloto_jednorazowo": c["zloto_jednorazowo"],
+                "kara_za_zmiane_produkcji": p["kara_za_zmiane"],
+            })
+            if len(plan) >= limit:
+                break
+
+        nieosiagalne = [
+            {"moje_miasto": c["moje_miasto"], "partner": c["partner"],
+             "nacja": c["nacja"], "dystans": c["dystans"],
+             "handel_na_ture": c["handel_na_ture"], "powod": c["czym"],
+             "tur_pracy_na_droge": c.get("tur_pracy_na_droge")}
+            for c in wynik if not c.get("osiagalne")][:limit]
+
+        warto_droge = sorted(naj.values(),
+                             key=lambda r: r["tur_pracy_na_droge"])[:limit]
+
+        return {
+            "jak_chodzi_karawana": {
+                "klasa": mclass,
+                "natywne_tereny": natywne_tereny or
+                    "ŻADEN — tylko drogi, koleje i rzeki",
+                "natywne_ulepszenia": sorted(
+                    n for n in _road_move_costs(rs)
+                    if n in ("Road", "Railroad", "Maglev", "River")),
+                "prom": (f"{prom.name} ({prom.build_cost} tarcz, ruch "
+                         f"{prom.move_rate}, ładowność {prom.transport_cap})"
+                         if prom else "brak — brakuje: " + ", ".join(prom_brak)),
+            },
+            "zasady_handlu": {
+                "styl_wartosci": rev_style, "styl_premii": bon_style,
+                "trademindist": mindist, "tradeworldrelpct": rel_pct,
+                "max_tras_na_miasto": max_routes or "bez limitu",
+                "typy_bez_wartosci": sorted(k for k, v in pct.items() if v <= 0),
+            },
+            "plan": plan,
+            "produkcja_w_miastach": produkcja,
+            "warto_dobudowac_droge": warto_droge,
+            "za_blisko_na_szlak": sorted(za_blisko.values(),
+                                        key=lambda r: r["dystans"]),
+            "nieosiagalne_mimo_wartosci": nieosiagalne,
+            "odrzucone_powody": dict(odrzucone),
+            "zbadanych_par": len(badane),
+            "kandydatow_razem": len(cands),
+        }
+
 
 # --------------------------------------------------------- wspolne narzedzia
 
@@ -4402,6 +4888,12 @@ class IntelMixin:
         return self._need_intel().trade_routes(
             self._intel_ruleset(), int(args.get("limit") or 15), full,
             bool(args.get("tylko_miedzykontynentalne")))
+
+    def ai_caravans(self, args: dict) -> dict:
+        full = bool(args.get("pelny_wglad", self._intel_full))
+        return self._need_intel().caravan_plan(
+            self._intel_ruleset(), int(args.get("limit") or 12),
+            int(args.get("max_tur") or 60), full)
 
     def ai_disband(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))

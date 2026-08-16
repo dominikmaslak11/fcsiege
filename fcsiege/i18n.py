@@ -593,6 +593,7 @@ TOOL_NAMES: dict[str, str] = {
     "korupcja": "waste",
     "moje_technologie": "my_technologies",
     "szlaki_handlowe": "trade_routes",
+    "plan_karawan": "caravan_plan",
     "co_da_rozwiazanie": "disbanding_yields",
     "audyt_miast": "city_audit",
     "przejezdnosc": "reachability",

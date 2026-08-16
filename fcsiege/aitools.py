@@ -606,6 +606,37 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "plan_karawan",
+        "description": (
+            "Odpowiada na trzy pytania naraz: w KTÓRYCH miastach opłaca się "
+            "zbudować karawanę, DO KTÓRYCH obcych miast ją wysłać i CZYM tam "
+            "dotrzeć — drogą czy morzem. Sprawdza dostępność dróg i tras "
+            "morskich, bo klasa Merchant w wielu zestawach nie jest natywna "
+            "dla żadnego terenu i porusza się wyłącznie po drogach, kolejach "
+            "i rzekach — bez ciągłej drogi karawana nie ruszy się z miejsca "
+            "i musi płynąć promem. Wartość trasy liczy dokładnymi wzorami "
+            "z traderoutes.c (styl CLASSIC/SIMPLE brany z ustawień partii), "
+            "a nie przybliżeniem po rozmiarze miasta. Podaje też czas "
+            "produkcji karawany w każdym mieście i karę za zmianę produkcji. "
+            "Wywołaj, gdy użytkownik pyta gdzie budować karawany, dokąd "
+            "prowadzić szlaki, czy budować drogę do obcego miasta albo czy "
+            "wozić karawany morzem."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer",
+                          "description": "ile tras zaproponować, domyślnie 12"},
+                "max_tur": {"type": "integer",
+                            "description": "odrzuć trasy dłuższe niż tyle tur "
+                                           "(produkcja + marsz), domyślnie 60"},
+                "pelny_wglad": {"type": "boolean",
+                                "description": "użyj wiedzy spoza mgły wojny"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "szlaki_handlowe",
         "description": (
             "Wyznacza optymalne szlaki handlowe dla karawan, wprost z reguł "
@@ -752,6 +783,7 @@ TOOL_METHOD = {
     "audyt_miast": "ai_cities",
     "co_da_rozwiazanie": "ai_disband",
     "szlaki_handlowe": "ai_trade",
+    "plan_karawan": "ai_caravans",
     "epoki": "ai_eras",
     "moje_technologie": "ai_techs",
     "korupcja": "ai_corruption",
@@ -857,6 +889,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_disband(dict(args))
     if name == "szlaki_handlowe":
         return bridge.ai_trade(dict(args))
+    if name == "plan_karawan":
+        return bridge.ai_caravans(dict(args))
     if name == "epoki":
         return bridge.ai_eras(dict(args))
     if name == "moje_technologie":

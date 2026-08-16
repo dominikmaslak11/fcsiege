@@ -400,6 +400,39 @@ def test_savegame():
     check("da się ograniczyć do tras przez morze",
           all(c["miedzykontynentalna"] for c in ov["propozycje"]))
 
+    kar = dispatch(bridge, "plan_karawan", {"limit": 6})
+    if "blad" in kar:
+        check("plan karawan zgłasza brak danych zrozumiale",
+              isinstance(kar["blad"], str), kar["blad"])
+    else:
+        jak = kar["jak_chodzi_karawana"]
+        check("wie, po czym porusza się klasa handlowa",
+              bool(jak["klasa"]) and bool(jak["natywne_ulepszenia"]),
+              f"{jak['klasa']}: {jak['natywne_ulepszenia']}")
+        check("czyta styl wyceny tras z ustawień partii",
+              kar["zasady_handlu"]["styl_wartosci"] in
+              ("CLASSIC", "SIMPLE", "Classic", "Simple"),
+              kar["zasady_handlu"]["styl_wartosci"])
+        check("każda trasa w planie jest osiągalna i ma czym dotrzeć",
+              all(p.get("czym") and p.get("tur_marszu") is not None
+                  for p in kar["plan"]), f"{len(kar['plan'])} tras")
+        check("plan nie proponuje tras bezwartościowych",
+              all(p["procent_wartosci"] > 0 for p in kar["plan"]))
+        mind = kar["zasady_handlu"]["trademindist"]
+        check("plan respektuje minimalny dystans",
+              all(p["dystans"] >= mind for p in kar["plan"]), f"min={mind}")
+        check("miasta za blisko są nazwane, a nie tylko policzone",
+              all(r["dystans"] < mind for r in kar["za_blisko_na_szlak"]),
+              f"{len(kar['za_blisko_na_szlak'])} miast")
+        check("wycena drogi podaje dodatnie tury pracy",
+              all(r["tur_pracy_na_droge"] > 0
+                  for r in kar["warto_dobudowac_droge"]),
+              f"{len(kar['warto_dobudowac_droge'])} propozycji")
+        check("każde moje miasto ma wyliczoną produkcję karawany",
+              all("tur_na_karawane" in v
+                  for v in kar["produkcja_w_miastach"].values()),
+              f"{len(kar['produkcja_w_miastach'])} miast")
+
     plan = dispatch(bridge, "co_da_rozwiazanie", {})
     check("czyta procent zwrotu z reguł",
           0 < plan.get("zwrot_procent", 0) <= 100, str(plan.get("zwrot_procent")))
