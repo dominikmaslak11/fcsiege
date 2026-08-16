@@ -606,6 +606,34 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "co_budowac",
+        "description": (
+            "Mówi, co KONKRETNE miasto powinno budować w tej turze: budynek, "
+            "cud czy jednostkę — z wyceną każdej opcji ze stanu tego miasta, "
+            "a nie z ogólnej zasady. Sprawdza pułapki, które łatwo przeoczyć: "
+            "spichlerz działa na wzrost dopiero od progu MinSize i tylko przy "
+            "dodatnim bilansie żywności; port daje jedzenie wyłącznie na "
+            "terenie z flagą Sea (jeziora się nie liczą), więc zysk liczony "
+            "jest przez ponowną obsadę kafli; tanie akwedukty wymagają rzeki "
+            "lub jeziora OBOK, a na mapie hex sąsiadów jest sześć; budynek "
+            "procentowy mnoży to, co miasto już ma; mury nie dają zadowolenia. "
+            "Rozróżnia cudy o zasięgu City i Player. Podaje też, czego "
+            "zbudować SIĘ NIE DA i dlaczego. Wywołaj zawsze, gdy użytkownik "
+            "pyta 'co budować w mieście X', 'czy budować ten budynek', "
+            "'cud, ulepszenie czy jednostka'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "miasto": {"type": "string",
+                           "description": "nazwa miasta; pominięte = wszystkie"},
+                "limit": {"type": "integer",
+                          "description": "ile opcji pokazać na miasto, domyślnie 8"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
         "name": "plan_karawan",
         "description": (
             "Odpowiada na trzy pytania naraz: w KTÓRYCH miastach opłaca się "
@@ -784,6 +812,7 @@ TOOL_METHOD = {
     "co_da_rozwiazanie": "ai_disband",
     "szlaki_handlowe": "ai_trade",
     "plan_karawan": "ai_caravans",
+    "co_budowac": "ai_city_build",
     "epoki": "ai_eras",
     "moje_technologie": "ai_techs",
     "korupcja": "ai_corruption",
@@ -891,6 +920,8 @@ def _dispatch(bridge: ScenarioBridge, name: str, args: dict) -> dict:
         return bridge.ai_trade(dict(args))
     if name == "plan_karawan":
         return bridge.ai_caravans(dict(args))
+    if name == "co_budowac":
+        return bridge.ai_city_build(dict(args))
     if name == "epoki":
         return bridge.ai_eras(dict(args))
     if name == "moje_technologie":

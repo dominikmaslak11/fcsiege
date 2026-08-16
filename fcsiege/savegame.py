@@ -4382,6 +4382,501 @@ class Intel:
                 "promien_zasiegu": max_distance,
                 "fronty": sorted(rows, key=lambda r: -r["rozmiar"])}
 
+    # -------------------------------------------------- co budowac w miescie
+
+    def city_build_advice(self, rs, miasto: str = "", limit: int = 8) -> dict:
+        """Co konkretne miasto powinno zbudowac w tej turze - i dlaczego nie co innego.
+
+        Kazda pozycja jest wyceniona z regul i ze stanu TEGO miasta, a nie
+        z ogolnej zasady "swiatynia jest dobra". Rzeczy, ktore w tej sesji
+        okazaly sie pulapkami, maja tu wlasne sprawdzenia:
+
+          * spichlerz dziala na wzrost dopiero od rozmiaru z `MinSize`
+            w Growth_Food i tylko gdy miasto MA nadwyzke zywnosci;
+          * port daje `Output_Add_Tile` wylacznie na terenie z flaga Sea -
+            jezioro sie nie liczy - wiec zysk liczymy przez ponowna obsade
+            kafli, a nie po liczbie kafli morskich;
+          * tanie akwedukty maja wymog "Adjacent", a na hexie sasiadow jest
+            szesc, nie osiem;
+          * budynek procentowy (biblioteka, targ) mnozy to, co miasto juz
+            ma - w miescie o handlu 4 nie mnozy niczego;
+          * mury nie daja zadowolenia - ten `Make_Content` nalezy do
+            Mausoleum i tylko SPRAWDZA obecnosc murow;
+          * cud o zasiegu City dziala w jednym miescie, o zasiegu Player
+            w calym panstwie - to inna klasa inwestycji;
+          * karawana ma sens tylko wtedy, gdy klasa Merchant faktycznie
+            dojdzie do miasta budujacego cud.
+
+        Zwraca liste `opcje` posortowana wg oceny, kazda z polem `dlaczego`
+        i - gdy trzeba - `ostrzezenie`. Do tego `nie_oplaca_sie`, zeby bylo
+        widac, co zostalo rozwazone i odrzucone.
+        """
+        import collections
+        import itertools
+        import os
+
+        from .registry import parse_file
+
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        sec = s._sections[s.me.slot]
+        rows = {str(r.get("name")): r for r in (sec.table("c").dicts()
+                                                if sec.table("c") else [])}
+        if not rows:
+            return {"blad": "brak moich miast"}
+        wybrane = ([miasto] if miasto else list(rows))
+        if miasto and miasto not in rows:
+            return {"blad": f"nie mam miasta {miasto}",
+                    "dostepne": sorted(rows)}
+
+        tmap = TerrainMap(s)
+        ct = city_tiles(s)
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        mine_blds: set[str] = set()
+        for r in rows.values():
+            mine_blds |= set(s._bits(r.get("improvements")))
+        mine_incr, road_pct = _tile_bonuses(rs)
+
+        # ustawienia partii, ktore zmieniaja werdykty
+        st = s.reg.get("settings")
+        stbl = st.table("set") if st else None
+        setting = {str(r.get("name")): r.get("value")
+                   for r in (stbl.dicts() if stbl else [])}
+        gpath = os.path.join(rs.path, "game.ruleset")
+        illness_on, illness_min = False, 99
+        gr_ini: list[int] = []
+        if os.path.exists(gpath):
+            g = parse_file(gpath, base_dir=os.path.dirname(rs.path))
+            ill = g.get("illness")
+            if ill is not None:
+                illness_on = str(ill.str("illness_on")).upper() in ("TRUE", "1")
+                illness_min = ill.int("illness_min_size") or 99
+            civ = g.get("civstyle")
+            if civ is not None:
+                gr_ini = [int(v) for v in civ.list("granary_food_ini")] or []
+        # suwak podatkow jest w sekcji gracza, nie w ustawieniach serwera -
+        # bez tego kazdy budynek mnozacy zloto wychodzil na zero
+        tax = int(sec.get("rates.tax") or setting.get("taxrate") or 0)
+
+        # ile wolnych miejsc pod miasta i ile pracy czeka - dla Settlers/Workers
+        try:
+            wzrost = self.growth_potential(rs, limit=99)
+            praca_backlog = sum(int(c.get("tur_pracy_lacznie") or 0)
+                                for c in wzrost.get("miasta", []))
+        except Exception:  # noqa: BLE001
+            praca_backlog = 0
+
+        # miasta budujace cud - cel dla karawan
+        merch = next((u for u in rs.units.values() if "HelpWonder" in u.flags),
+                     None)
+        budowane_cudy = {str(r.get("currently_building_name")): nm
+                         for nm, r in rows.items()
+                         if str(r.get("currently_building_kind")) == "Building"
+                         and rs.buildings.get(
+                             str(r.get("currently_building_name"))) is not None
+                         and rs.buildings[
+                             str(r.get("currently_building_name"))].is_wonder}
+        cudowe = [(nm, r) for nm, r in rows.items()
+                  if str(r.get("currently_building_kind")) == "Building"
+                  and rs.buildings.get(str(r.get("currently_building_name")))
+                  is not None
+                  and rs.buildings[str(r.get("currently_building_name"))].is_wonder]
+
+        wyniki = []
+        for nm in wybrane:
+            r = rows[nm]
+            x, y = int(r["x"]), int(r["y"])
+            size = int(r.get("size") or 0)
+            blds = set(s._bits(r.get("improvements")))
+            zapas = int(r.get("shield_stock") or 0)
+            nadw = int(r.get("last_turns_shield_surplus") or 0)
+            jedn = [u for u in s.units_of(s.me.slot)
+                    if str(u.homecity) == str(r.get("id"))]
+            kind_now = str(r.get("currently_building_kind") or "")
+
+            # --- kafle i obsada
+            area = [((x + dx) % self.geom.xsize, (y + dy) % self.geom.ysize)
+                    for dx in range(-3, 4) for dy in range(-4, 5)
+                    if (dx, dy) != (0, 0)
+                    and self.geom.real_distance(
+                        (x, y), ((x + dx) % self.geom.xsize,
+                                 (y + dy) % self.geom.ysize)) <= 2]
+
+            def yld(a, b, port: bool):
+                t = tmap.terrain(a, b)
+                terr = rs.terrains.get(t) if t else None
+                if terr is None:
+                    return None
+                f, sh, tr = terr.food, terr.shield, terr.trade
+                if tmap.has_extra("River", a, b):
+                    tr += 1
+                if tmap.has_extra("Road", a, b):
+                    tr += road_pct.get(t, 0) // 100
+                if tmap.has_extra("Irrigation", a, b):
+                    f += terr.irrigation_food_incr or 0
+                if tmap.has_extra("Mine", a, b):
+                    sh += mine_incr.get(t, 0)
+                if port and "Sea" in terr.flags:
+                    f += 1
+                return f, sh, tr
+
+            def obsada(sz: int, port: bool):
+                """Najwiecej tarcz przy nieujemnym bilansie zywnosci."""
+                vs = [v for v in (yld(a, b, port) for a, b in area) if v]
+                c = yld(x, y, port) or (0, 0, 0)
+                if len(vs) < sz:
+                    return None
+                best = None
+                for combo in itertools.combinations(vs, min(sz, len(vs))):
+                    f = sum(v[0] for v in combo) + max(c[0], 1) - sz * 2
+                    if f < 0:
+                        continue
+                    sh = sum(v[1] for v in combo) + max(c[1], 1)
+                    tr = sum(v[2] for v in combo) + c[2]
+                    if best is None or (sh, f, tr) > best:
+                        best = (sh, f, tr)
+                return best
+
+            ma_port = "Harbour" in blds or "Harbor" in blds
+            teraz = obsada(size, ma_port)
+            handel = teraz[2] if teraz else 0
+
+            # --- sasiedztwo dla tanich akweduktow (hex: szesc sasiadow)
+            sasiedzi = list(self.geom.neighbours(x, y))
+            ma_rzeke = tmap.has_extra("River", x, y) or any(
+                tmap.has_extra("River", a, b) for a, b in sasiedzi)
+            ma_jezioro = any(tmap.terrain(a, b) == "Lake" for a, b in sasiedzi)
+            nadmorskie = any(
+                (rs.terrains.get(tmap.terrain(a, b) or "") is not None
+                 and not rs.terrains[tmap.terrain(a, b)].is_land)
+                for a, b in sasiedzi)
+
+            def spelnia(bl) -> tuple[bool, list[str]]:
+                braki = []
+                for q in bl.reqs:
+                    if q.type == "Tech":
+                        if (q.name in techs) != q.present:
+                            braki.append(f"technologia {q.name}")
+                    elif q.type == "Extra" and q.name == "River":
+                        if ma_rzeke != q.present:
+                            braki.append("rzeka obok" if q.present
+                                         else "brak rzeki obok")
+                    elif q.type == "Terrain" and q.name == "Lake":
+                        if ma_jezioro != q.present:
+                            braki.append("jezioro obok" if q.present
+                                         else "brak jeziora obok")
+                    elif q.type == "TerrainFlag" and q.name == "Sea":
+                        if nadmorskie != q.present:
+                            braki.append("dostęp do morza")
+                    elif q.type == "Building":
+                        pool = blds if q.range.lower() == "city" else mine_blds
+                        if (q.name in pool) != q.present:
+                            braki.append(f"budynek {q.name}")
+                    elif q.type == "MinSize":
+                        if str(q.name).isdigit() and (size >= int(q.name)) != q.present:
+                            braki.append(f"rozmiar {q.name}")
+                return (not braki), braki
+
+            def tur(koszt: int) -> int | None:
+                brak = max(0, koszt - zapas)
+                return None if nadw <= 0 else max(1, -(-brak // nadw))
+
+            opcje, odrzucone = [], []
+
+            def dodaj(nazwa, koszt, upkeep, ocena, czemu, rodzaj,
+                      ostrzezenie=None):
+                t = tur(koszt)
+                rec = {"co": nazwa, "rodzaj": rodzaj, "koszt_tarcz": koszt,
+                       "utrzymanie_zl": upkeep, "tur": t,
+                       "ocena": round(ocena, 2), "dlaczego": czemu}
+                if ostrzezenie:
+                    rec["ostrzezenie"] = ostrzezenie
+                opcje.append(rec)
+
+            # ---------------- budynki i cudy
+            for bnm, bl in rs.buildings.items():
+                if bnm in blds:
+                    continue
+                ok, braki = spelnia(bl)
+                if not ok:
+                    odrzucone.append({"co": bnm, "powod": "; ".join(braki)})
+                    continue
+                if bl.is_wonder and bnm in mine_blds:
+                    odrzucone.append({"co": bnm, "powod": "już mam ten cud"})
+                    continue
+
+                ocena, czemu, ostrz = 0.0, [], None
+
+                # --- port: policz FAKTYCZNY zysk przez ponowna obsade
+                if bnm in ("Harbour", "Harbor"):
+                    bez = obsada(size, False)
+                    z = obsada(size, True)
+                    zysk_f = (z[1] - bez[1]) if (z and bez) else (
+                        99 if z and not bez else 0)
+                    # ile rozmiarow wyzej miasto utrzyma dzieki portowi
+                    dalej = 0
+                    for sz in range(size + 1, min(size + 5, 21)):
+                        if obsada(sz, True) and not obsada(sz, False):
+                            dalej += 1
+                    ocena = zysk_f * 2 + dalej * 3
+                    czemu.append(f"jedzenie {zysk_f:+} przy obecnym rozmiarze")
+                    if dalej:
+                        czemu.append(f"utrzyma {dalej} rozmiarów więcej, "
+                                     "których bez portu nie wyżywi")
+                    if not zysk_f and not dalej:
+                        ostrz = ("miasto nie obrabia kafli morskich — port "
+                                 "nie doda tu nic, a kosztuje "
+                                 f"{bl.upkeep} zł na turę")
+
+                # --- spichlerz: prog MinSize w Growth_Food + musi byc nadwyzka
+                elif bnm == "Granary":
+                    growth = 0
+                    for eff in rs.effects_by_type.get("Growth_Food", []):
+                        if not any(q.type == "Building" and q.name == bnm
+                                   for q in eff.reqs):
+                            continue
+                        okr = all(
+                            (size >= int(q.name)) == q.present
+                            for q in eff.reqs
+                            if q.type == "MinSize" and str(q.name).isdigit())
+                        if okr:
+                            growth = max(growth, eff.value)
+                    nadwyzka_f = teraz[1] if teraz else 0
+                    ocena = (growth / 10.0) if (growth and nadwyzka_f > 0) else 0
+                    if not growth:
+                        ostrz = (f"przy rozmiarze {size} Growth_Food nie działa "
+                                 "— spichlerz nie przyspieszy wzrostu")
+                    elif nadwyzka_f <= 0:
+                        ostrz = ("miasto nie ma nadwyżki żywności — nie ma "
+                                 "czego zatrzymywać przy wzroście")
+                    else:
+                        czemu.append(f"Growth_Food +{growth}% przy rozmiarze {size}")
+
+                # --- akwedukty: sufit i zaraza
+                elif bnm.startswith("Aqueduct"):
+                    cap = 0
+                    for eff in rs.effects_by_type.get("Size_Adj", []):
+                        need = [q for q in eff.reqs if q.type == "Building"]
+                        if all((q.name in blds) == q.present for q in need):
+                            cap += eff.value
+                    blisko = max(0, 6 - (cap - size))
+                    zaraza = illness_on and size >= illness_min
+                    ocena = blisko + (4 if zaraza else 0)
+                    if zaraza:
+                        czemu.append(f"zaraza działa od rozmiaru {illness_min}, "
+                                     f"miasto ma {size} — Health_Pct +30")
+                    czemu.append(f"sufit {cap}, miasto {size}")
+                    if cap - size > 6:
+                        ostrz = f"do sufitu {cap} jeszcze daleko"
+
+                # --- budynki procentowe: mnoza to, co miasto JUZ ma
+                else:
+                    proc = []
+                    for etype in ("Output_Bonus", "Output_Bonus_2"):
+                        for eff in rs.effects_by_type.get(etype, []):
+                            if not any(q.type == "Building" and q.present
+                                       and q.name == bnm for q in eff.reqs):
+                                continue
+                            out = [q.name for q in eff.reqs
+                                   if q.type == "OutputType"]
+                            proc.append((out[0] if out else "?", eff.value))
+                    content = 0
+                    for eff in rs.effects_by_type.get("Make_Content", []):
+                        # efekt nalezy do budynku tylko wtedy, gdy to JEGO
+                        # obecnosc jest wymogiem, a nie gdy inny budynek go
+                        # sprawdza (Mausoleum vs City Walls)
+                        wlasne = [q for q in eff.reqs if q.type == "Building"]
+                        if len(wlasne) == 1 and wlasne[0].name == bnm \
+                                and wlasne[0].present:
+                            content += eff.value
+                    for out, pct in proc:
+                        baza = handel * (tax / 100.0) if out.lower() == "gold" \
+                            else (handel if out.lower() == "science" else 0)
+                        zysk = baza * pct / 100.0
+                        ocena += zysk
+                        czemu.append(f"+{pct}% {out} od {baza:.0f} → +{zysk:.1f}/turę")
+                    niezadowoleni = max(0, size - self._unhappy_size(rs))
+                    if content:
+                        ocena += min(content, niezadowoleni) * 2
+                        czemu.append(f"Make_Content +{content}, "
+                                     f"niezadowolonych {niezadowoleni}")
+                        if not niezadowoleni:
+                            ostrz = "w tym mieście nie ma jeszcze niezadowolonych"
+                    if bl.is_wonder:
+                        zasieg = self._wonder_scope(rs, bnm)
+                        ocena += 6 if zasieg == "Player" else 2
+                        czemu.append(f"cud o zasięgu {zasieg}"
+                                     + (" — działa w KAŻDYM mieście"
+                                        if zasieg == "Player" else
+                                        " — działa tylko tutaj"))
+                        # cud, ktorego efekty MNOZA inny budynek, jest wart
+                        # tyle, ile tych budynkow stoi - Mausoleum bez murow
+                        # i sadow nie daje nic
+                        wymagane = self._wonder_needs(rs, bnm)
+                        if wymagane:
+                            mam = sum(1 for w in wymagane if w in mine_blds)
+                            czemu.append("efekty liczą budynki: "
+                                         + ", ".join(sorted(wymagane)))
+                            if not mam:
+                                ocena -= 5
+                                ostrz = ("nie masz ani jednego z budynków, "
+                                         "które ten cud mnoży ("
+                                         + ", ".join(sorted(wymagane))
+                                         + ") — dziś dałby zero")
+                        inne = budowane_cudy.get(bnm)
+                        if inne and inne != nm:
+                            ocena -= 8
+                            ostrz = (f"{inne} już to buduje "
+                                     f"({rows[inne].get('shield_stock')}"
+                                     f"/{bl.build_cost} tarcz) — drugie "
+                                     "miasto marnuje tarcze")
+                    if not proc and not content and not bl.is_wonder:
+                        # tylko efekty, ktorych JEDYNYM wymogiem budynkowym
+                        # jest ten budynek - inaczej mury "dostaja"
+                        # Make_Content nalezacy do Mausoleum
+                        efekty = []
+                        for et, lst in rs.effects_by_type.items():
+                            for e in lst:
+                                wl = [q for q in e.reqs if q.type == "Building"]
+                                if len(wl) == 1 and wl[0].name == bnm \
+                                        and wl[0].present:
+                                    efekty.append(et)
+                                    break
+                        if efekty:
+                            czemu.append("efekty: " + ", ".join(sorted(efekty)[:4]))
+
+                if bl.upkeep:
+                    ocena -= bl.upkeep * 0.8
+                    czemu.append(f"utrzymanie {bl.upkeep} zł/turę")
+                dodaj(bnm, bl.build_cost, bl.upkeep, ocena,
+                      "; ".join(czemu) or "brak wyraźnego zysku",
+                      "cud" if bl.is_wonder else "budynek", ostrz)
+
+            # ---------------- karawana na cud
+            if merch is not None and cudowe:
+                cele = []
+                for cnm, cr in cudowe:
+                    if cnm == nm:
+                        continue
+                    t = march_turns(rs, tmap, self.geom, merch, (x, y),
+                                    (int(cr["x"]), int(cr["y"])),
+                                    max_nodes=60000, cities=ct)
+                    if t is not None:
+                        cele.append((cnm, t, str(cr.get("currently_building_name"))))
+                if cele:
+                    cnm, t, cud = min(cele, key=lambda e: e[1])
+                    tb = tur(merch.build_cost)
+                    dodaj(merch.name, merch.build_cost, 0,
+                          8 - (t + (tb or 0)) * 0.2,
+                          f"{merch.build_cost} tarcz trafi w całości do „{cud}” "
+                          f"w mieście {cnm}; marsz {t} tur",
+                          "jednostka",
+                          ("zmiana z budynku na jednostkę kosztuje 50% zapasu "
+                           f"({zapas} tarcz)") if kind_now == "Building" and zapas
+                          else None)
+                else:
+                    odrzucone.append({
+                        "co": merch.name,
+                        "powod": ("żadne miasto budujące cud nie jest osiągalne "
+                                  f"dla klasy {rs.uclass_of(merch).name}")})
+
+            # ---------------- osadnicy i robotnicy
+            for unm in ("Settlers", "Workers", "Migrants"):
+                ut = rs.units.get(unm)
+                if ut is None or not all(t in techs for t in ut.req_techs()):
+                    continue
+                pop = getattr(ut, "pop_cost", 0)
+                if pop and size <= pop:
+                    odrzucone.append({"co": unm,
+                                      "powod": f"miasto musi mieć więcej niż "
+                                               f"{pop} obywateli"})
+                    continue
+                czemu, ocena = [], 0.0
+                if unm == "Workers":
+                    ocena = 3 if praca_backlog > 40 else 1
+                    czemu.append(f"w państwie czeka {praca_backlog} tur pracy "
+                                 "polowej")
+                    czemu.append(f"kosztuje {ut.uk_shield} tarczy utrzymania")
+                elif unm == "Settlers":
+                    nadwyzka_f = teraz[1] if teraz else 0
+                    ocena = 4 if nadwyzka_f > 1 else 1.5
+                    czemu.append(f"zdejmuje {pop} obywateli z miasta "
+                                 f"(bilans żywności {nadwyzka_f:+})")
+                elif unm == "Migrants":
+                    # migrant przenosi obywatela tam, gdzie jest go czym
+                    # wyzywic - ma sens tylko z miasta, ktore juz nie rosnie
+                    nadwyzka_f = teraz[1] if teraz else 0
+                    stoi = obsada(size + 1, ma_port) is None
+                    ocena = 2.5 if stoi else 0.5
+                    czemu.append(
+                        f"przenosi 1 obywatela do innego miasta; to miasto "
+                        + ("nie wyżywi już kolejnego" if stoi
+                           else f"jeszcze rośnie (bilans {nadwyzka_f:+})"))
+                dodaj(unm, ut.build_cost, 0, ocena, "; ".join(czemu),
+                      "jednostka",
+                      ("zmiana z budynku na jednostkę kosztuje 50% zapasu"
+                       if kind_now == "Building" and zapas else None))
+
+            opcje.sort(key=lambda o: (-o["ocena"], o["tur"] or 999))
+            wyniki.append({
+                "miasto": nm, "rozmiar": size,
+                "buduje_teraz": r.get("currently_building_name"),
+                "zapas_tarcz": zapas, "nadwyzka_tarcz": nadw,
+                "bilans_zywnosci": (teraz[1] if teraz else None),
+                "handel": handel,
+                "budynki": sorted(blds),
+                "jednostek_na_utrzymaniu": len(jedn),
+                "tarcz_na_utrzymanie_jednostek": sum(
+                    rs.units[u.type].uk_shield for u in jedn
+                    if u.type in rs.units),
+                "rzeka_obok": ma_rzeke, "jezioro_obok": ma_jezioro,
+                "nadmorskie": nadmorskie,
+                "opcje": opcje[:limit],
+                "nie_oplaca_sie": [o for o in opcje[limit:] if o["ocena"] <= 0][:6],
+                "nie_da_sie_zbudowac": odrzucone[:12],
+            })
+
+        wyniki.sort(key=lambda w: -w["rozmiar"])
+        return {"ustroj": gov, "suwak_podatkow": tax,
+                "zaraza_od_rozmiaru": illness_min if illness_on else "wyłączona",
+                "miasta": wyniki}
+
+    def _unhappy_size(self, rs) -> int:
+        """Od ktorego obywatela zaczyna sie niezadowolenie."""
+        vals = [e.value for e in rs.effects_by_type.get("City_Unhappy_Size", [])
+                if not e.reqs]
+        return vals[0] if vals else 4
+
+    def _wonder_needs(self, rs, name: str) -> set[str]:
+        """Budynki, ktorych obecnosc warunkuje efekty tego cudu.
+
+        Mausoleum daje Make_Content za KAZDE City Walls i za KAZDY Courthouse;
+        bez nich jest to dwiescie tarcz w nic. Temple of Artemis tak samo
+        zalezy od Swiatyn.
+        """
+        out: set[str] = set()
+        for lst in rs.effects_by_type.values():
+            for eff in lst:
+                wl = [q for q in eff.reqs if q.type == "Building" and q.present]
+                if any(q.name == name for q in wl) and len(wl) > 1:
+                    out |= {q.name for q in wl if q.name != name}
+        return out
+
+    def _wonder_scope(self, rs, name: str) -> str:
+        """Czy cud dziala w swoim miescie, czy w calym panstwie."""
+        zasiegi = set()
+        for lst in rs.effects_by_type.values():
+            for eff in lst:
+                for q in eff.reqs:
+                    if q.type == "Building" and q.present and q.name == name:
+                        zasiegi.add(q.range)
+        for pref in ("World", "Player"):
+            if pref in zasiegi:
+                return pref
+        return "City"
+
     # ------------------------------------------------------------ karawany
 
     def caravan_plan(self, rs, limit: int = 12, max_turns: int = 60,
@@ -4944,6 +5439,11 @@ class IntelMixin:
         return self._need_intel().trade_routes(
             self._intel_ruleset(), int(args.get("limit") or 15), full,
             bool(args.get("tylko_miedzykontynentalne")))
+
+    def ai_city_build(self, args: dict) -> dict:
+        return self._need_intel().city_build_advice(
+            self._intel_ruleset(), str(args.get("miasto") or ""),
+            int(args.get("limit") or 8))
 
     def ai_caravans(self, args: dict) -> dict:
         full = bool(args.get("pelny_wglad", self._intel_full))

@@ -400,6 +400,43 @@ def test_savegame():
     check("da się ograniczyć do tras przez morze",
           all(c["miedzykontynentalna"] for c in ov["propozycje"]))
 
+    bud = dispatch(bridge, "co_budowac", {"limit": 30})
+    if "blad" in bud:
+        check("co budować zgłasza brak danych zrozumiale",
+              isinstance(bud["blad"], str), bud["blad"])
+    else:
+        check("czyta suwak podatków z sekcji gracza, nie z ustawień serwera",
+              isinstance(bud["suwak_podatkow"], int)
+              and 0 <= bud["suwak_podatkow"] <= 100,
+              f"{bud['suwak_podatkow']}%")
+        wszystkie = [o for c in bud["miasta"] for o in c["opcje"]]
+        check("każda opcja ma rodzaj, koszt i uzasadnienie",
+              all(o["rodzaj"] in ("budynek", "cud", "jednostka")
+                  and o["koszt_tarcz"] > 0 and o["dlaczego"]
+                  for o in wszystkie), f"{len(wszystkie)} opcji")
+        # budynek, ktory tylko WARUNKUJE cudzy efekt, nie moze go sobie
+        # przypisywac - mury nie daja Make_Content, daje je Mausoleum
+        mury = [o for o in wszystkie if o["co"] == "City Walls"]
+        check("mury nie przypisują sobie zadowolenia z Mausoleum",
+              all("Make_Content" not in o["dlaczego"] for o in mury),
+              f"{len(mury)} wystąpień")
+        # cudu nie zaczyna sie w drugim miescie, gdy pierwsze go juz buduje
+        dubel = [o for c in bud["miasta"] for o in c["opcje"]
+                 if o.get("ostrzezenie") and "już to buduje" in o["ostrzezenie"]]
+        check("ostrzega przed dublowaniem cudu w drugim mieście",
+              all(o["ocena"] <= 2 for o in dubel), f"{len(dubel)} ostrzeżeń")
+        for c in bud["miasta"]:
+            tanie = [o for o in c["opcje"] + c["nie_oplaca_sie"]
+                     if o["co"] in ("Aqueduct, River", "Aqueduct, Lake")]
+            if tanie:
+                check(f"{c['miasto']}: tani akwedukt tylko przy rzece/jeziorze",
+                      c["rzeka_obok"] or c["jezioro_obok"],
+                      f"rzeka={c['rzeka_obok']} jezioro={c['jezioro_obok']}")
+                break
+        check("podaje, czego zbudować się nie da, wraz z powodem",
+              all(o.get("powod") for c in bud["miasta"]
+                  for o in c["nie_da_sie_zbudowac"]))
+
     kar = dispatch(bridge, "plan_karawan", {"limit": 6})
     if "blad" in kar:
         check("plan karawan zgłasza brak danych zrozumiale",
