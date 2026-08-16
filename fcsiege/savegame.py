@@ -1810,6 +1810,228 @@ class Intel:
 
 
 
+
+    # ---------------------------------------------------------- plan badan
+
+    STRATEGIE = {
+        "gospodarka": {
+            "opis": "złoto, handel, mniejsze marnotrawstwo, budowle bez utrzymania",
+            "efekty": {"Output_Bonus": 3, "Output_Inc_Tile": 3, "Output_Add_Tile": 2,
+                       "Output_Waste_Pct": 3, "Upkeep_Free": 3,
+                       "Trade_Revenue_Bonus": 3, "Max_Trade_Routes": 2,
+                       "Shield2Gold_Factor": 1, "Gov_Center": 3},
+            "wyjscia": {"Gold": 3, "Trade": 3, "Luxury": 1, "Shield": 2,
+                        "Science": 1, "Food": 1},
+        },
+        "nauka": {
+            "opis": "biblioteki, uniwersytety, cudy naukowe",
+            "efekty": {"Output_Bonus": 3, "Output_Add_Tile": 3,
+                       "Tech_Parasite_Pct_Max": 4, "Give_Imm_Tech": 4,
+                       "Output_Waste_Pct": 1},
+            "wyjscia": {"Science": 4, "Trade": 2, "Gold": 1, "Shield": 1,
+                        "Luxury": 0, "Food": 0},
+        },
+        "ekspansja": {
+            "opis": "więcej miast, większe miasta, żywność",
+            "efekty": {"Size_Adj": 4, "Size_Unlimit": 4, "Growth_Food": 3,
+                       "Make_Content": 2, "Output_Add_Tile": 2,
+                       "Empire_Size_Base": 3, "Health_Pct": 2, "Popcost_Free": 3},
+            "wyjscia": {"Food": 4, "Shield": 1, "Trade": 1, "Gold": 1,
+                        "Science": 1, "Luxury": 1},
+        },
+        "wojna": {
+            "opis": "jednostki zaczepne, weterani, obrona",
+            "efekty": {"Veteran_Build": 3, "Defend_Bonus": 3,
+                       "Unit_Upkeep_Free_Per_City": 2, "Make_Content_Mil": 2,
+                       "Martial_Law_Each": 2, "Unit_No_Lose_Pop": 2},
+            "wyjscia": {"Shield": 3, "Gold": 1, "Food": 1, "Trade": 0,
+                        "Science": 0, "Luxury": 0},
+        },
+    }
+
+    def research_plan(self, rs, strategia: str = "gospodarka",
+                      limit: int = 8) -> dict:
+        """Kolejnosc badan pod obrana strategie, z uzasadnieniem liczbowym.
+
+        Kazda technologia dostaje ocene za to, co odblokowuje: budowle wazymy
+        ich efektami przez pryzmat strategii i karzemy za utrzymanie, jednostki
+        po siile na tarcze, cudy dodatkowo za zasieg (efekt dzialajacy w calym
+        panstwie jest wart wiecej niz w jednym miescie). Wynik dzielimy przez
+        liczbe technologii do zdobycia, zeby porownywac cele blizsze z dalszymi.
+        """
+        s = self.save
+        if s.me is None:
+            return {"blad": "brak gracza ludzkiego"}
+        strategia = strategia if strategia in self.STRATEGIE else "gospodarka"
+        waga = self.STRATEGIE[strategia]
+        techs = _known_techs(s) - {"A_NONE"}
+        gov = s.me.government or ""
+        sec = s._sections[s.me.slot]
+        rows = list(sec.table("c").dicts()) if sec.table("c") else []
+        n_miast = max(1, len(rows))
+        mine_blds: set[str] = set()
+        for r in rows:
+            mine_blds |= set(s._bits(r.get("improvements")))
+
+        research = s.reg.get("research")
+        row = list(research.table("r").dicts())[0] if research else {}
+        tempo = sec.int("research.bulbs_last_turn")
+
+        def ocena_budowli(b) -> tuple[float, list[str]]:
+            punkty, czemu = 0.0, []
+            for typ, lst in rs.effects_by_type.items():
+                w = waga["efekty"].get(typ, 0)
+                if not w:
+                    continue
+                for e in lst:
+                    hit = [r for r in e.reqs if r.type == "Building"
+                           and r.present and r.name == b.name]
+                    if not hit:
+                        continue
+                    outs = [r.name for r in e.reqs if r.type == "OutputType"]
+                    mnoz = max((waga["wyjscia"].get(o, 1) for o in outs),
+                               default=1)
+                    zasieg = hit[0].range.lower()
+                    skala = n_miast if zasieg != "city" else 1
+                    if b.is_wonder and zasieg == "city":
+                        skala = 1
+                    wartosc = w * mnoz * abs(e.value) / 50 * max(1, skala) ** 0.5
+                    punkty += wartosc
+                    czemu.append(f"{typ}{e.value:+d}"
+                                 + (f" [{outs[0]}]" if outs else "")
+                                 + (" w każdym mieście" if zasieg != "city" else ""))
+            # utrzymanie boli tym bardziej, im wiecej miast
+            punkty -= b.upkeep * n_miast * 0.4
+            if b.upkeep == 0 and punkty > 0:
+                czemu.append("zero utrzymania")
+                punkty *= 1.4
+            return punkty, czemu[:4]
+
+        def ocena_jednostki(u) -> float:
+            if "NoBuild" in u.flags or u.build_cost <= 0:
+                return 0.0
+            if strategia == "wojna":
+                return (u.attack * 2 + u.defense) / max(1, u.build_cost) * 30
+            if "Cities" in u.flags and strategia == "ekspansja":
+                return 8.0
+            if "TradeRoute" in u.flags and strategia == "gospodarka":
+                return 10.0
+            if "Settlers" in u.flags:
+                return 3.0
+            return 0.5
+
+        kandydaci = []
+        for name in rs.techs:
+            if name in techs:
+                continue
+            lancuch = sorted(t for t in rs._closure(name, set())
+                             if t in rs.techs and t not in techs)
+            if not lancuch:
+                continue
+            punkty, powody = 0.0, []
+            for b in rs.buildings.values():
+                if name not in b.req_techs():
+                    continue
+                if not all(t in techs or t in lancuch for t in b.req_techs()):
+                    continue
+                p, czemu = ocena_budowli(b)
+                if p > 0:
+                    punkty += p
+                    powody.append(f"{b.label or b.name}: " + ", ".join(czemu))
+            for u in rs.units.values():
+                if name not in u.req_techs():
+                    continue
+                if not all(t in techs or t in lancuch for t in u.req_techs()):
+                    continue
+                p = ocena_jednostki(u)
+                if p > 1:
+                    punkty += p
+                    powody.append(f"{u.name} ({u.attack}/{u.defense}, "
+                                  f"{u.build_cost} tarcz)")
+            # ustroj to osobna kategoria: zdejmuje kary calego panstwa
+            for g, wym in rs.gov_techs.items():
+                if name in wym and g != gov:
+                    kara_teraz = self._city_effect(rs, "Output_Penalty_Tile", "",
+                                                   set(), gov, techs, mine_blds, 0)
+                    kara_po = self._city_effect(rs, "Output_Penalty_Tile", "",
+                                                set(), g, techs, mine_blds, 0)
+                    mr_teraz = self._city_effect(rs, "Max_Rates", "", set(), gov,
+                                                 techs, mine_blds, 0)
+                    mr_po = self._city_effect(rs, "Max_Rates", "", set(), g,
+                                              techs, mine_blds, 0)
+                    zysk = (kara_teraz - kara_po) * 8 + (mr_po - mr_teraz) * 0.4
+                    if zysk > 0:
+                        punkty += zysk * n_miast ** 0.5
+                        powody.append(
+                            f"ustrój {g}: kara za kafel {kara_teraz}→{kara_po}, "
+                            f"suwak {mr_teraz}→{mr_po}%")
+            if punkty <= 0:
+                continue
+            kandydaci.append({
+                "technologia": name,
+                "technologii_do_zdobycia": len(lancuch),
+                "lancuch": lancuch,
+                "ocena": round(punkty, 1),
+                "ocena_na_technologie": round(punkty / len(lancuch), 1),
+                "tur_przy_obecnym_tempie": None,
+                "dlaczego": powody[:4],
+            })
+
+        # koszt w turach: styl kosztu czytamy z regul
+        import os
+        from .registry import parse_file
+        base, styl, box = 20, "Classic", 100
+        path = os.path.join(rs.path, "game.ruleset")
+        if os.path.exists(path):
+            g = parse_file(path, base_dir=os.path.dirname(rs.path))
+            r2 = g.get("research")
+            if r2:
+                base = r2.int("base_tech_cost", 20)
+                styl = r2.str("tech_cost_style", "Classic")
+        st = s.reg.get("settings")
+        stbl = st.table("set") if st else None
+        for x in (stbl.dicts() if stbl else []):
+            if str(x.get("name")) == "sciencebox":
+                box = int(x.get("value") or 100)
+
+        znanych = len(techs)
+
+        def koszt(ile: int) -> int:
+            razem = 0
+            for i in range(ile):
+                reqs = znanych + i + 1
+                if styl.lower().startswith("classic"):
+                    c = base * (1 + reqs) * (1 + reqs) ** 0.5 / 2
+                else:
+                    c = base * reqs
+                razem += int(c * box / 100)
+            return razem
+
+        for c in kandydaci:
+            b = koszt(c["technologii_do_zdobycia"])
+            c["bulbs"] = b
+            c["tur_przy_obecnym_tempie"] = (max(1, -(-b // tempo))
+                                            if tempo > 0 else None)
+            if c["tur_przy_obecnym_tempie"]:
+                c["ocena_na_ture"] = round(c["ocena"] / c["tur_przy_obecnym_tempie"], 2)
+
+        kandydaci.sort(key=lambda c: -(c.get("ocena_na_ture") or
+                                       c["ocena_na_technologie"]))
+        return {
+            "strategia": strategia,
+            "co_to_znaczy": waga["opis"],
+            "dostepne_strategie": {k: v["opis"] for k, v in self.STRATEGIE.items()},
+            "znanych_technologii": znanych,
+            "bulbs_na_ture": tempo,
+            "badane_teraz": str(row.get("now_name") or "") or None,
+            "kolejnosc": kandydaci[:limit],
+            "jak_liczone": (
+                "ocena to suma wartości tego, co technologia odblokowuje, ważona "
+                "strategią; budowle karane za utrzymanie i premiowane za jego "
+                "brak, efekty działające w całym państwie liczone wyżej niż "
+                "jednomiastowe; wynik dzielony przez tury do zdobycia"),
+        }
+
     # --------------------------------------------------------- plan na ture
 
     def turn_plan(self, rs, nastawienie: str = "auto") -> dict:
@@ -3670,6 +3892,11 @@ class IntelMixin:
         return self._need_intel().mobility(
             self._intel_ruleset(), int(args.get("tury") or 2),
             str(args.get("jednostka", "")))
+
+    def ai_research_plan(self, args: dict) -> dict:
+        return self._need_intel().research_plan(
+            self._intel_ruleset(), str(args.get("strategia", "gospodarka")),
+            int(args.get("limit") or 8))
 
     def ai_turn_plan(self, args: dict) -> dict:
         return self._need_intel().turn_plan(

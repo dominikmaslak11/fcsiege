@@ -583,6 +583,29 @@ dróg**, dystans do stolicy i otoczenie. Miasto bez dróg i portu jest
 obciążeniem, nie nabytkiem — kosztuje utrzymanie, garnizon i szczęście, a nie
 daje produkcji.
 
+### Plan badań pod strategię
+
+`plan_badan` szereguje technologie względem **obranej strategii**:
+`gospodarka`, `nauka`, `ekspansja`, `wojna`.
+
+Ocena nie jest listą życzeń — liczy się z reguł. Każda technologia dostaje
+punkty za to, co odblokowuje:
+
+| składnik | jak ważony |
+|---|---|
+| budowla | jej efekty przez pryzmat strategii, **minus utrzymanie × liczba miast**, a przy zerowym utrzymaniu premia ×1,4 |
+| zasięg efektu | działający w całym państwie liczy się wyżej niż jednomiastowy |
+| jednostka | siła na tarczę (przy strategii wojennej), rola przy pozostałych |
+| ustrój | o ile zdejmuje karę za kafel i podnosi suwak, razy pierwiastek z liczby miast |
+
+Wynik dzielimy przez **tury do zdobycia**, żeby dało się porównać cel odległy
+o jedną technologię z celem o jedenaście. Koszt w bulbach liczymy stylem
+z `game.ruleset` (`tech_cost_style`, `base_tech_cost`) i mnożnikiem
+`sciencebox` z ustawień partii.
+
+Ta sama pozycja startowa daje przez to trzy różne odpowiedzi: `Currency` dla
+gospodarki, `Pottery` dla ekspansji, `Writing` dla nauki.
+
 ### Plan na turę
 
 `plan_tury` odpowiada na „co mam teraz robić" — produkcja miasto po mieście,

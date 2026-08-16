@@ -365,7 +365,12 @@ KEYS: dict[str, str] = {
     "niezadowolonych_gdy_wszystkie_wyjda": "unhappy_if_all_march_out",
     "miast_ponad_limit": "cities_over_the_limit",
     "tur_marszu": "march_turns",
-    "faza": "stage", "nastawienie": "posture", "podatki_teraz": "rates_now", "podatki_rada": "rates_advice",
+    "faza": "stage", "nastawienie": "posture",
+    "strategia": "strategy", "co_to_znaczy": "what_it_means",
+    "dostepne_strategie": "available_strategies", "kolejnosc": "order",
+    "ocena": "score", "ocena_na_technologie": "score_per_tech",
+    "ocena_na_ture": "score_per_turn", "technologii_do_zdobycia": "techs_to_acquire",
+    "bulbs_na_ture": "bulbs_per_turn", "jak_liczone": "how_it_is_scored", "podatki_teraz": "rates_now", "podatki_rada": "rates_advice",
     "podatki": "tax", "nauka": "science", "luksus": "luxury",
     "maksymalny_suwak": "rate_cap", "kara_despotyzmu_na_kafel": "per_tile_penalty",
     "badania_cel": "research_goal", "lepsze_ustroje": "better_governments",
@@ -569,6 +574,7 @@ TOOL_NAMES: dict[str, str] = {
     "gotowosc_wojenna": "war_readiness",
     "plan_kampanii": "campaign_plan",
     "plan_tury": "turn_plan",
+    "plan_badan": "research_plan",
     "mobilnosc": "mobility",
     "alerty": "alerts",
     "uklady_dyplomatyczne": "treaties",
@@ -687,6 +693,16 @@ TOOL_DESC: dict[str, str] = {
         "of troops standing in the field. Call it for questions about "
         "regrouping, an overstretched front, \"will I make it\", \"where do "
         "I gather\", \"should I uncover this border\".",
+    "plan_badan":
+        "The research order for a CHOSEN STRATEGY, with a numeric rationale. "
+        "Every technology is scored by what it unlocks: buildings weighted by "
+        "their effects through the lens of the strategy, penalised for upkeep "
+        "and rewarded for having none; units by strength per shield; "
+        "governments by the penalty they lift from the whole realm. An effect "
+        "that works in every city counts for more than a single-city one. The "
+        "score is divided by turns-to-acquire so near and far goals compare. "
+        "Strategies: gospodarka (economy), nauka (science), ekspansja "
+        "(expansion), wojna (war).",
     "plan_tury":
         "What to do this turn: what to build in each city, how to set the tax "
         "sliders, which research to pick and what to spend gold on. The advice "
