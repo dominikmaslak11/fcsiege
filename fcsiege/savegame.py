@@ -5240,6 +5240,16 @@ class Intel:
             for bnm, bl in rs.buildings.items():
                 if bnm in blds:
                     continue
+                # budynek moze byc PRZESTARZALY - gra go wtedy nie pokaze.
+                # Mausoleum znika po zdobyciu Sanitation, a narzedzie bez tego
+                # sprawdzenia polecalo cud, ktorego nie da sie postawic.
+                stary = (bl.przestarzaly(techs)
+                         if hasattr(bl, "przestarzaly") else None)
+                if stary:
+                    odrzucone.append({
+                        "co": bnm,
+                        "powod": f"przestarzały — unieważniony przez {stary}"})
+                    continue
                 ok, braki = spelnia(bl)
                 if not ok:
                     odrzucone.append({"co": bnm, "powod": "; ".join(braki)})

@@ -184,6 +184,16 @@ class Building:
     genus: str = "Improvement"
     reqs: list[Req] = field(default_factory=list)
     flags: set[str] = field(default_factory=set)
+    # warunki, po ktorych budynku NIE DA SIE juz postawic - np. Mausoleum
+    # przestaje byc dostepne, gdy gracz pozna Sanitation
+    obsolete_by: list[Req] = field(default_factory=list)
+
+    def przestarzaly(self, techs: set[str]) -> str | None:
+        """Nazwa technologii, ktora unieważnia ten budynek - albo None."""
+        for r in self.obsolete_by:
+            if r.type == "Tech" and (r.name in techs) == r.present:
+                return r.name
+        return None
 
     @property
     def is_wonder(self) -> bool:
@@ -406,6 +416,7 @@ class Ruleset:
                 genus=clean_name(sec.str("genus", "Improvement")),
                 reqs=self._reqs_from(sec),
                 flags=set(str(f) for f in sec.list("flags")),
+                obsolete_by=self._reqs_from(sec, "obsolete_by"),
             )
             self.buildings[b.name] = b
 
