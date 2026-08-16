@@ -4539,8 +4539,22 @@ class Intel:
                         best = (sh, f, tr)
                 return best
 
+            def max_jedzenie(sz: int, port: bool):
+                """Obsada z najwieksza iloscia zywnosci - gdy nic nie wychodzi na plus."""
+                vs = [v for v in (yld(a, b, port) for a, b in area) if v]
+                c = yld(x, y, port) or (0, 0, 0)
+                vs.sort(key=lambda v: (-v[0], -v[1], -v[2]))
+                pk = vs[:sz]
+                return (sum(v[1] for v in pk) + max(c[1], 1),
+                        sum(v[0] for v in pk) + max(c[0], 1) - sz * 2,
+                        sum(v[2] for v in pk) + c[2])
+
             ma_port = "Harbour" in blds or "Harbor" in blds
             teraz = obsada(size, ma_port)
+            glodowe = teraz is None
+            if glodowe:
+                # zadna obsada nie wychodzi na zero - miasto sie kurczy
+                teraz = max_jedzenie(size, ma_port)
             handel = teraz[2] if teraz else 0
 
             # --- sasiedztwo dla tanich akweduktow (hex: szesc sasiadow)
@@ -4611,17 +4625,22 @@ class Intel:
 
                 # --- port: policz FAKTYCZNY zysk przez ponowna obsade
                 if bnm in ("Harbour", "Harbor"):
-                    bez = obsada(size, False)
-                    z = obsada(size, True)
-                    zysk_f = (z[1] - bez[1]) if (z and bez) else (
-                        99 if z and not bez else 0)
-                    # ile rozmiarow wyzej miasto utrzyma dzieki portowi
+                    # porownujemy na obsadzie najedzeniowej, bo pytanie brzmi
+                    # "czy port wyzywi miasto", a nie "ile da przy obecnym
+                    # ustawieniu obywateli"
+                    bez_f = max_jedzenie(size, False)[1]
+                    z_f = max_jedzenie(size, True)[1]
+                    zysk_f = z_f - bez_f
+                    ratuje = bez_f < 0 <= z_f
                     dalej = 0
                     for sz in range(size + 1, min(size + 5, 21)):
                         if obsada(sz, True) and not obsada(sz, False):
                             dalej += 1
-                    ocena = zysk_f * 2 + dalej * 3
-                    czemu.append(f"jedzenie {zysk_f:+} przy obecnym rozmiarze")
+                    ocena = zysk_f * 2 + dalej * 3 + (8 if ratuje else 0)
+                    czemu.append(f"bilans żywności {bez_f:+} → {z_f:+}")
+                    if ratuje:
+                        czemu.append("bez portu miasto nie wyżywi się przy "
+                                     "ŻADNEJ obsadzie i będzie się kurczyć")
                     if dalej:
                         czemu.append(f"utrzyma {dalej} rozmiarów więcej, "
                                      "których bez portu nie wyżywi")
@@ -4845,6 +4864,7 @@ class Intel:
                 "buduje_teraz": r.get("currently_building_name"),
                 "zapas_tarcz": zapas, "nadwyzka_tarcz": nadw,
                 "bilans_zywnosci": (teraz[1] if teraz else None),
+                "kurczy_sie": glodowe,
                 "handel": handel,
                 "budynki": sorted(blds),
                 "jednostek_na_utrzymaniu": len(jedn),
